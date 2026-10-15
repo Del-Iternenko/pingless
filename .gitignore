@@ -1,0 +1,7 @@
+/target
+*.pdb
+WinDivert.dll
+WinDivert64.sys
+config.toml
+# Notes on a commercial product; kept locally, not published.
+docs/exitlag-analysis.md

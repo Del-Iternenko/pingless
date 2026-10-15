@@ -1,0 +1,16 @@
+[package]
+name = "openlag-capture"
+description = "Per-process UDP capture on Windows via WinDivert"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+openlag-core.workspace = true
+parking_lot.workspace = true
+tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+libloading = "0.9"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_System_Threading"] }

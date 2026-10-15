@@ -1,0 +1,27 @@
+# Same secret as OPENLAG_PSK on the exit relay.
+psk = "change-me"
+
+# How many routes carry every packet at once. 1 = no multipath.
+multipath = 2
+
+# Optional tuning:
+# probe_interval_ms = 250   # latency probe interval per route
+# switch_margin_ms = 5.0    # a route must be this much better to replace an active one
+# flow_idle_secs = 120      # forget flows idle for this long
+
+[capture]
+# Executable names whose UDP traffic is tunnelled (case-insensitive).
+processes = ["cs2.exe"]
+# Also move UDP sockets that were open before OpenLag started. Usually disconnects
+# a running match, so it is off by default.
+tunnel_existing = false
+
+[[exits]]
+name = "frankfurt"
+routes = [
+  { name = "direct",    via = "203.0.113.10:7000" },
+  { name = "high-port", via = "203.0.113.10:47000" },
+  { name = "bridge-ams", via = "198.51.100.20:7001" },
+  # Pin a route to a second network interface (e.g. a phone hotspot):
+  # { name = "lte", via = "203.0.113.10:7000", bind = "192.168.43.15" },
+]

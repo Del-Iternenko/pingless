@@ -1,0 +1,23 @@
+[package]
+name = "openlag-core"
+description = "OpenLag client engine: paths, probing, route selection and multipath tunnelling"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+openlag-proto.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+serde.workspace = true
+parking_lot.workspace = true
+rand.workspace = true
+socket2.workspace = true
+
+[dev-dependencies]
+openlag-relay = { path = "../openlag-relay" }
+tracing-subscriber.workspace = true
+parking_lot.workspace = true
+rand.workspace = true
+anyhow.workspace = true
