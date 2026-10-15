@@ -2,6 +2,7 @@
 
 mod settings;
 mod sys;
+mod tray;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -280,6 +281,67 @@ impl AppState {
         net.xray = None;
     }
 
+    async fn set_preferred_exit(&self, key: Option<String>) {
+        self.settings.lock().preferred_exit = key.clone();
+        let _ = self.save();
+        if let Some(engine) = &self.net.lock().await.engine {
+            engine.set_preferred_exit(key);
+        }
+    }
+
+    /// Switches capture on or off (the tray's "Optimisation" item).
+    async fn toggle_capture(&self) -> Result<()> {
+        let mut net = self.net.lock().await;
+        net.auto_started = false;
+        if net.capture.is_some() {
+            net.suppress_auto = self.settings.lock().auto_connect;
+            self.stop_capture(&mut net);
+            Ok(())
+        } else {
+            net.suppress_auto = false;
+            self.start_capture(&mut net)
+        }
+    }
+
+    /// Alive exits for the tray menu, best ping first, with display names.
+    fn tray_servers(&self, snapshot: &Snapshot) -> Vec<tray::TrayServer> {
+        let s = self.settings.lock();
+        let name = |key: &str| {
+            s.subscriptions
+                .iter()
+                .flat_map(|sub| {
+                    sub.servers
+                        .iter()
+                        .map(move |srv| (sub.server_key(srv), srv.name.clone()))
+                })
+                .find(|(k, _)| k == key)
+                .map(|(_, n)| n)
+                .unwrap_or_else(|| key.to_string())
+        };
+        let mut best: HashMap<&str, Option<f64>> = HashMap::new();
+        for p in &snapshot.paths {
+            let ping = if p.alive { p.srtt_ms } else { None };
+            let e = best.entry(p.exit.as_str()).or_insert(None);
+            if ping.is_some() && (e.is_none() || ping < *e) {
+                *e = ping;
+            }
+        }
+        let mut v: Vec<tray::TrayServer> = best
+            .into_iter()
+            .map(|(k, ping)| tray::TrayServer {
+                key: k.to_string(),
+                label: name(k),
+                ping_ms: ping,
+            })
+            .collect();
+        v.sort_by(|a, b| {
+            a.ping_ms
+                .unwrap_or(f64::MAX)
+                .total_cmp(&b.ping_ms.unwrap_or(f64::MAX))
+        });
+        v
+    }
+
     fn fetch_options(&self) -> FetchOptions {
         let s = self.settings.lock();
         FetchOptions {
@@ -450,12 +512,8 @@ async fn toggle_subscription(st: Shared<'_>, id: String, enabled: bool) -> CmdRe
 
 #[tauri::command]
 async fn set_preferred(st: Shared<'_>, key: Option<String>) -> CmdResult<()> {
-    st.settings.lock().preferred_exit = key.clone();
-    st.save().map_err(err)?;
-    if let Some(engine) = &st.net.lock().await.engine {
-        engine.set_preferred_exit(key);
-    }
-    Ok(())
+    st.set_preferred_exit(key).await;
+    st.save().map_err(err)
 }
 
 #[tauri::command]
@@ -614,7 +672,9 @@ async fn set_startup(
     autostart: bool,
     start_minimized: bool,
     probe_ms: u64,
+    close_to_tray: bool,
 ) -> CmdResult<()> {
+    st.settings.lock().close_to_tray = close_to_tray;
     let rebuild = {
         let mut s = st.settings.lock();
         s.start_minimized = start_minimized;
@@ -698,6 +758,9 @@ fn main() {
             });
             let _ = state.save(); // persist the generated device id
             app.manage(state.clone());
+            if let Err(e) = tray::create(app.handle()) {
+                warn!("tray icon: {e}");
+            }
             let minimized = state.settings.lock().start_minimized
                 || std::env::args().any(|a| a == "--minimized");
             if minimized && let Some(w) = app.get_webview_window("main") {
@@ -737,10 +800,30 @@ fn main() {
                         capturing: net.capture.is_some(),
                     };
                     drop(net);
+                    if let Some(snap) = &tick.snapshot {
+                        let servers = state.tray_servers(snap);
+                        let preferred = state.settings.lock().preferred_exit.clone();
+                        tray::update(&handle, tick.capturing, preferred.as_deref(), &servers);
+                    }
                     let _ = handle.emit("tick", tick);
                 }
             });
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // The close button hides to the tray unless the user picked "Exit" there.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && !tray::QUITTING.load(std::sync::atomic::Ordering::SeqCst)
+                && window
+                    .app_handle()
+                    .state::<Arc<AppState>>()
+                    .settings
+                    .lock()
+                    .close_to_tray
+            {
+                api.prevent_close();
+                let _ = window.hide();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_state,

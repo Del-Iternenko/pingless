@@ -518,6 +518,7 @@ function renderSettings() {
     $("opt-relays").value = s.relays_toml;
     $("opt-autostart").checked = s.autostart;
     $("opt-minimized").checked = s.start_minimized;
+    $("opt-tray").checked = s.close_to_tray;
     $("opt-probe").value = String(s.probe_interval_ms);
     $("ui-chart").value = String(s.ui.chart_seconds);
     $("ui-good").value = s.ui.ping_good;
@@ -557,7 +558,7 @@ $("ui-save").addEventListener("click", () => {
 });
 $("startup-save").addEventListener("click", async () => {
   try {
-    await call("set_startup", { autostart: $("opt-autostart").checked, startMinimized: $("opt-minimized").checked, probeMs: Number($("opt-probe").value) }, "Сохранено");
+    await call("set_startup", { autostart: $("opt-autostart").checked, startMinimized: $("opt-minimized").checked, probeMs: Number($("opt-probe").value), closeToTray: $("opt-tray").checked }, "Сохранено");
   } catch { /* toast */ }
   await refreshState();
 });
@@ -588,6 +589,9 @@ function renderAll() {
   if (page === "page-procs") renderProcsPage();
   if (page === "page-settings") renderSettings();
 }
+
+listen("refresh", () => refreshState());
+listen("notify", (e) => toast(e.payload, "error"));
 
 listen("auto", (e) => {
   toast(e.payload, "ok");

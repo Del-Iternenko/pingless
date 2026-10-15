@@ -33,6 +33,8 @@ pub struct Settings {
     /// Start with Windows (scheduled task with highest privileges).
     pub autostart: bool,
     pub start_minimized: bool,
+    /// The window's close button hides OpenLag to the tray instead of quitting.
+    pub close_to_tray: bool,
     pub ui: UiPrefs,
     /// Pre-groups versions stored a flat list here; migrated on load.
     #[serde(skip_serializing)]
@@ -62,6 +64,7 @@ impl Default for Settings {
             probe_interval_ms: 250,
             autostart: false,
             start_minimized: false,
+            close_to_tray: true,
             ui: UiPrefs::default(),
             games: Vec::new(),
             multipath: 2,

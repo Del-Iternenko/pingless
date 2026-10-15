@@ -180,13 +180,24 @@ impl Handle {
     pub fn open(filter: &str, layer: u32, priority: i16, flags: u64) -> Result<Arc<Handle>> {
         let api = api()?;
         let c = CString::new(filter)?;
-        // SAFETY: valid NUL-terminated filter string.
-        let raw = unsafe { (api.open)(c.as_ptr(), layer, priority, flags) };
-        if raw == INVALID_HANDLE_VALUE || raw.is_null() {
+        // 1058/1072: another program (e.g. Zapret's "remove services") deleted the
+        // WinDivert service while the driver was in use. The service stays "marked for
+        // deletion" (shown as disabled) until every handle to it closes, then the next
+        // open reinstalls it. Give that a few seconds before giving up.
+        let mut attempt = 0;
+        loop {
+            // SAFETY: valid NUL-terminated filter string.
+            let raw = unsafe { (api.open)(c.as_ptr(), layer, priority, flags) };
+            if raw != INVALID_HANDLE_VALUE && !raw.is_null() {
+                return Ok(Arc::new(Handle { raw, api }));
+            }
             let code = unsafe { GetLastError() };
-            bail!("WinDivertOpen(\"{filter}\") failed: {}", explain(code));
+            attempt += 1;
+            if !matches!(code, 1058 | 1072) || attempt >= 10 {
+                bail!("WinDivertOpen(\"{filter}\") failed: {}", explain(code));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
         }
-        Ok(Arc::new(Handle { raw, api }))
     }
 
     /// Blocks until a packet arrives. Returns the packet length.
@@ -248,6 +259,10 @@ fn explain(code: u32) -> String {
         577 => "driver signature rejected (Secure Boot / HVCI policy?)",
         654 => "an incompatible WinDivert driver version is already loaded; reboot or stop it",
         1060 => "driver service missing",
+        1058 | 1072 => {
+            "the WinDivert service was removed by another program (Zapret 'remove services', \
+             GoodbyeDPI...) while in use; close that program and the Services window, or reboot"
+        }
         1275 => "driver blocked by the system or antivirus",
         1753 => "Base Filtering Engine service is not running",
         _ => "",
