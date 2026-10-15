@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Установка OpenLag</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="bg"></canvas>
+  <audio id="music" src="music.mp3" loop preload="auto"></audio>
+
+  <header class="titlebar" data-tauri-drag-region>
+    <img src="logo.png" alt="" width="20" height="20" data-tauri-drag-region>
+    <span data-tauri-drag-region>OpenLag · <span id="ver"></span></span>
+    <span class="grow" data-tauri-drag-region></span>
+    <button class="tb" id="btn-min" aria-label="Свернуть"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+    <button class="tb close" id="btn-close" aria-label="Закрыть"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </header>
+
+  <aside class="side">
+    <div class="logo-wrap"><img src="logo.png" alt="" class="logo"></div>
+    <h1>OpenLag</h1>
+    <p class="tagline">Пинг ниже. Игра чище.</p>
+    <ol class="steps" id="steps"></ol>
+    <div class="player" id="player">
+      <div class="eq" id="eq"><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="track"><span class="label">Сейчас играет</span><b>Династия</b></div>
+      <button class="mute" id="mute" aria-label="Выключить музыку">
+        <svg viewBox="0 0 24 24" id="ico-sound"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12"/></svg>
+      </button>
+      <input type="range" id="vol" min="0" max="100" value="45" aria-label="Громкость">
+    </div>
+    <div class="repack">repack by <b>Del-Iternenko</b></div>
+  </aside>
+
+  <main class="panel">
+    <!-- 1. Welcome -->
+    <section class="step" data-step="welcome">
+      <h2>Добро пожаловать</h2>
+      <p class="lead">Мастер установит <b>OpenLag</b>, open-source оптимизатор игрового трафика: игры, браузер или что угодно пойдут через ваши VPN-подписки или свои серверы, по нескольким маршрутам сразу и без TUN.</p>
+      <div class="features">
+        <div><b>Multipath</b><span>пакет летит по 2–4 маршрутам, доходит первый</span></div>
+        <div><b>По процессам</b><span>через туннель только то, что вы выбрали</span></div>
+        <div><b>Подписки</b><span>Happ, Incy, Amnezia, vless, vmess, trojan, ss</span></div>
+        <div><b>Живой пинг</b><span>графики пинга, джиттера и потерь</span></div>
+      </div>
+      <div class="actions"><span class="grow"></span><button class="btn primary" data-next>Далее</button></div>
+    </section>
+
+    <!-- 2. License -->
+    <section class="step" data-step="license">
+      <h2>Пользовательское соглашение</h2>
+      <div class="eula" id="eula" tabindex="0">
+        <p><b>OpenLag — свободное программное обеспечение</b>, распространяется по лицензиям MIT или Apache-2.0 на выбор пользователя.</p>
+        <p>1. Программа предоставляется «как есть», без каких-либо гарантий. Автор не отвечает за прямой или косвенный ущерб, потерю данных, блокировки игровых аккаунтов или нарушения правил сервисов, возникшие при её использовании.</p>
+        <p>2. OpenLag перехватывает сетевой трафик выбранных программ с помощью драйвера WinDivert и направляет его через серверы, которые указали вы: свои relay-серверы или серверы ваших VPN-подписок. Автор OpenLag не предоставляет серверов и не видит ваш трафик.</p>
+        <p>3. Вы самостоятельно отвечаете за законность использования VPN и прокси в вашей стране, а также за соблюдение условий ваших VPN-провайдеров и правил игр. Некоторые античиты могут не допускать драйверы перехвата трафика.</p>
+        <p>4. Вместе с программой устанавливаются сторонние компоненты: WinDivert (LGPL-3.0 / GPL-2.0, © basil00), xray-core (MPL-2.0, © Project X) и, при необходимости, Microsoft Edge WebView2 Runtime. Тексты лицензий лежат в папке программы, в каталоге licenses.</p>
+        <p>5. Программа хранит настройки и подписки только на вашем компьютере, в папке %APPDATA%\dev.openlag.app, и никуда их не отправляет, кроме загрузки самих подписок с адресов, которые вы добавили.</p>
+        <p>6. Для работы перехвата программе нужны права администратора. Удалить OpenLag можно через «Параметры → Приложения» или uninstall.exe в папке программы.</p>
+        <p>Исходный код: <a href="#" data-url="github">github.com/Del-Iternenko</a></p>
+      </div>
+      <label class="check big"><input type="checkbox" id="accept"><span>Я принимаю условия пользовательского соглашения</span></label>
+      <div class="actions"><button class="btn" data-back>Назад</button><span class="grow"></span><button class="btn primary" data-next id="accept-next" disabled>Далее</button></div>
+    </section>
+
+    <!-- 3. Options -->
+    <section class="step" data-step="options">
+      <h2>Параметры установки</h2>
+      <label class="label" for="dir">Папка установки</label>
+      <div class="row">
+        <input id="dir" spellcheck="false">
+        <button class="btn" id="browse">Обзор…</button>
+      </div>
+      <div class="opts">
+        <label class="check"><input type="checkbox" id="opt-desktop" checked><span>Создать ярлык на рабочем столе</span></label>
+        <label class="check"><input type="checkbox" id="opt-start" checked><span>Добавить в меню «Пуск»</span></label>
+        <label class="check"><input type="checkbox" id="opt-extras" checked><span>Дополнительное ПО <small>WinDivert (драйвер перехвата), xray-core (подписки VLESS/VMess/Trojan/SS) и WebView2 Runtime, если его нет. Без него OpenLag не сможет перехватывать трафик.</small></span></label>
+        <label class="check"><input type="checkbox" id="opt-autostart"><span>Запускать OpenLag вместе с Windows</span></label>
+        <label class="check"><input type="checkbox" id="opt-launch" checked><span>Запустить OpenLag после установки</span></label>
+      </div>
+      <p class="hint" id="space"></p>
+      <div class="actions"><button class="btn" data-back>Назад</button><span class="grow"></span><button class="btn primary glow" id="go">Установить</button></div>
+    </section>
+
+    <!-- 4. Progress -->
+    <section class="step" data-step="progress">
+      <h2 id="progress-title">Установка…</h2>
+      <div class="pct" id="pct">0%</div>
+      <div class="bar"><div id="bar"></div></div>
+      <div class="file" id="file">&nbsp;</div>
+      <div class="tip" id="tip"></div>
+    </section>
+
+    <!-- 5. Done -->
+    <section class="step" data-step="done">
+      <div class="done-icon"><svg viewBox="0 0 24 24"><path d="M5 12.5 10 17l9-10"/></svg></div>
+      <h2 id="done-title">OpenLag установлен</h2>
+      <p class="lead" id="done-text">Всё готово. Добавьте подписку на вкладке «Подписки», выберите программы на вкладке «Процессы» и жмите большую кнопку.</p>
+      <button class="gh" data-url="github">
+        <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.3 1.1 2.9.8.1-.6.3-1.1.6-1.3-2.2-.3-4.6-1.1-4.6-5a3.9 3.9 0 0 1 1-2.7c-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.8 1a9.6 9.6 0 0 1 5 0c1.9-1.3 2.8-1 2.8-1 .5 1.4.2 2.4.1 2.7a3.9 3.9 0 0 1 1 2.7c0 3.9-2.4 4.7-4.6 5 .4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5A10 10 0 0 0 12 2z"/></svg>
+        <span><b>github.com/Del-Iternenko</b><small>исходники, обновления, звёздочки приветствуются</small></span>
+      </button>
+      <div class="actions"><span class="grow"></span><button class="btn primary" id="finish">Готово</button></div>
+    </section>
+
+    <!-- Uninstall -->
+    <section class="step" data-step="uninstall">
+      <h2>Удаление OpenLag</h2>
+      <p class="lead">OpenLag будет удалён вместе с ярлыками, автозапуском и правилом брандмауэра. Это займёт пару секунд.</p>
+      <label class="check big"><input type="checkbox" id="rm-settings"><span>Удалить также настройки и подписки <small>%APPDATA%\dev.openlag.app</small></span></label>
+      <div class="actions"><span class="grow"></span><button class="btn" id="cancel-un">Отмена</button><button class="btn danger" id="go-un">Удалить</button></div>
+    </section>
+  </main>
+
+  <div class="error" id="error" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

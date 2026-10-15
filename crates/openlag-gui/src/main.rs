@@ -61,6 +61,8 @@ struct ServerView {
     protocol: String,
     address: String,
     port: u16,
+    /// Why the server is off (manual or keyword filter); None if it is on.
+    disabled: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -96,21 +98,21 @@ struct Tick {
 impl AppState {
     async fn view(&self) -> StateView {
         let settings = self.settings.lock().clone();
-        let servers = settings
-            .subscriptions
-            .iter()
-            .filter(|s| s.enabled)
-            .flat_map(|sub| {
-                sub.servers.iter().map(move |srv| ServerView {
-                    key: sub.server_key(srv),
+        let mut servers = Vec::new();
+        for sub in settings.subscriptions.iter().filter(|s| s.enabled) {
+            for srv in &sub.servers {
+                let key = sub.server_key(srv);
+                servers.push(ServerView {
+                    disabled: settings.server_disabled(&key, srv),
+                    key,
                     name: srv.name.clone(),
                     subscription: sub.name.clone(),
                     protocol: srv.protocol.clone(),
                     address: srv.address.clone(),
                     port: srv.port,
-                })
-            })
-            .collect();
+                });
+            }
+        }
         let relay_names = settings::parse_relays(&settings.relays_toml)
             .map(|r| r.exits.into_iter().map(|e| e.name).collect())
             .unwrap_or_default();
@@ -163,7 +165,7 @@ impl AppState {
         for sub in s.subscriptions.iter().filter(|s| s.enabled) {
             for srv in &sub.servers {
                 let key = sub.server_key(srv);
-                if !keys.contains(&key) && !s.disabled_servers.contains(&key) {
+                if !keys.contains(&key) && s.server_disabled(&key, srv).is_none() {
                     keys.push(key);
                     servers.push(srv.clone());
                 }
@@ -213,7 +215,7 @@ impl AppState {
             proxies,
             preferred_exit: s.preferred_exit.clone(),
             multipath: s.multipath.max(1),
-            probe_interval_ms: 250,
+            probe_interval_ms: s.probe_interval_ms.clamp(100, 5000),
             switch_margin_ms: 5.0,
             flow_idle_secs: 120,
         };
@@ -294,11 +296,15 @@ fn exe_dir() -> PathBuf {
         .unwrap_or_default()
 }
 
+/// Our xray ships as `openlag-xray.exe`: other VPN clients (Happ) kill every process
+/// named `xray.exe` when they disconnect, which took our tunnel down with theirs.
 fn find_xray(resource_dir: Option<PathBuf>) -> Option<PathBuf> {
-    let mut candidates = vec![exe_dir().join("xray.exe")];
-    if let Some(r) = resource_dir {
-        candidates.push(r.join("xray.exe"));
-    }
+    let mut dirs = vec![exe_dir()];
+    dirs.extend(resource_dir);
+    let mut candidates: Vec<PathBuf> = dirs
+        .iter()
+        .flat_map(|d| [d.join("openlag-xray.exe"), d.join("xray.exe")])
+        .collect();
     if cfg!(debug_assertions) {
         candidates
             .push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vendor/xray/xray.exe"));
@@ -562,6 +568,69 @@ async fn set_options(
     Ok(())
 }
 
+/// Switches one server on or off. Off servers are not started at all.
+#[tauri::command]
+async fn set_server_enabled(st: Shared<'_>, key: String, enabled: bool) -> CmdResult<()> {
+    {
+        let mut s = st.settings.lock();
+        s.disabled_servers.retain(|k| k != &key);
+        if !enabled {
+            s.disabled_servers.push(key.clone());
+            if s.preferred_exit.as_deref() == Some(key.as_str()) {
+                s.preferred_exit = None;
+            }
+        }
+    }
+    st.save().map_err(err)?;
+    st.rebuild().await;
+    Ok(())
+}
+
+/// Words that switch off every matching server (name or address).
+#[tauri::command]
+async fn set_filters(st: Shared<'_>, keywords: Vec<String>) -> CmdResult<()> {
+    let mut k: Vec<String> = keywords
+        .into_iter()
+        .map(|w| w.trim().to_string())
+        .filter(|w| !w.is_empty())
+        .collect();
+    k.sort_by_key(|w| w.to_lowercase());
+    k.dedup_by_key(|w| w.to_lowercase());
+    st.settings.lock().disabled_keywords = k;
+    st.save().map_err(err)?;
+    st.rebuild().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_ui_prefs(st: Shared<'_>, ui: settings::UiPrefs) -> CmdResult<()> {
+    st.settings.lock().ui = ui;
+    st.save().map_err(err)
+}
+
+#[tauri::command]
+async fn set_startup(
+    st: Shared<'_>,
+    autostart: bool,
+    start_minimized: bool,
+    probe_ms: u64,
+) -> CmdResult<()> {
+    let rebuild = {
+        let mut s = st.settings.lock();
+        s.start_minimized = start_minimized;
+        let changed = s.probe_interval_ms != probe_ms;
+        s.probe_interval_ms = probe_ms.clamp(100, 5000);
+        changed
+    };
+    sys::set_autostart(autostart).map_err(err)?;
+    st.settings.lock().autostart = autostart;
+    st.save().map_err(err)?;
+    if rebuild {
+        st.rebuild().await;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn set_relays(st: Shared<'_>, text: String) -> CmdResult<()> {
     settings::parse_relays(&text).map_err(err)?;
@@ -611,12 +680,7 @@ async fn relaunch_admin(app: tauri::AppHandle, st: Shared<'_>) -> CmdResult<()> 
 // ---------------------------------------------------------------------------
 
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .with_target(false)
-        .init();
+    init_log();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -634,6 +698,11 @@ fn main() {
             });
             let _ = state.save(); // persist the generated device id
             app.manage(state.clone());
+            let minimized = state.settings.lock().start_minimized
+                || std::env::args().any(|a| a == "--minimized");
+            if minimized && let Some(w) = app.get_webview_window("main") {
+                let _ = w.minimize();
+            }
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -643,9 +712,16 @@ fn main() {
                 loop {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     // Skip a tick while a rebuild holds the lock.
-                    let Ok(net) = state.net.try_lock() else {
+                    let Ok(mut net) = state.net.try_lock() else {
                         continue;
                     };
+                    // Watchdog: if xray was killed from outside, bring everything back.
+                    if net.xray.as_mut().is_some_and(|x| !x.is_running()) {
+                        warn!("xray exited unexpectedly, restarting");
+                        drop(net);
+                        state.rebuild().await;
+                        continue;
+                    }
                     let tick = Tick {
                         snapshot: net.engine.as_ref().map(|e| e.snapshot()),
                         capture: net.capture.as_ref().map(|c| {
@@ -677,6 +753,10 @@ fn main() {
             pick_exe,
             set_options,
             set_relays,
+            set_server_enabled,
+            set_filters,
+            set_ui_prefs,
+            set_startup,
             list_processes,
             start,
             stop,
@@ -781,4 +861,37 @@ async fn auto_connect(st: Arc<AppState>, handle: tauri::AppHandle) {
             }
         }
     }
+}
+
+/// Logs to `%APPDATA%\dev.openlag.app\openlag.log` (the release build has no console).
+/// The file starts over when it grows past 5 MB.
+fn init_log() {
+    let filter =
+        || tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    let path = std::env::var_os("APPDATA")
+        .map(|a| PathBuf::from(a).join("dev.openlag.app").join("openlag.log"));
+    let file = path.and_then(|p| {
+        std::fs::create_dir_all(p.parent()?).ok()?;
+        let big = std::fs::metadata(&p).is_ok_and(|m| m.len() > 5 * 1024 * 1024);
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(!big)
+            .write(true)
+            .truncate(big)
+            .open(&p)
+            .ok()
+    });
+    match file {
+        Some(f) => tracing_subscriber::fmt()
+            .with_env_filter(filter())
+            .with_target(false)
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(f))
+            .init(),
+        None => tracing_subscriber::fmt()
+            .with_env_filter(filter())
+            .with_target(false)
+            .init(),
+    }
+    std::panic::set_hook(Box::new(|p| tracing::error!("panic: {p}")));
 }

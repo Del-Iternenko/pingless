@@ -132,3 +132,30 @@ pub fn ensure_firewall_rule() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+/// Starts OpenLag at logon through Task Scheduler with highest privileges, so there is
+/// no UAC prompt at every login (a Run registry key cannot elevate).
+pub fn set_autostart(on: bool) -> anyhow::Result<()> {
+    use std::os::windows::process::CommandExt;
+    let schtasks = |args: &[&str]| {
+        std::process::Command::new("schtasks")
+            .args(args)
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .output()
+    };
+    if !on {
+        let _ = schtasks(&["/Delete", "/TN", "OpenLag", "/F"]);
+        return Ok(());
+    }
+    let exe = std::env::current_exe()?;
+    let run = format!("\"{}\" --minimized", exe.display());
+    let out = schtasks(&[
+        "/Create", "/TN", "OpenLag", "/TR", &run, "/SC", "ONLOGON", "/RL", "HIGHEST", "/F",
+    ])?;
+    anyhow::ensure!(
+        out.status.success(),
+        "schtasks: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
+    Ok(())
+}

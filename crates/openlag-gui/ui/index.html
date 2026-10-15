@@ -104,7 +104,16 @@
           <button class="btn" id="auto-btn"><svg class="ic"><use href="#i-zap"/></svg>Авто</button>
         </div>
       </div>
-      <p class="hint">Пинг меряется по UDP через сам сервер, так же как пойдут пакеты игры. Новые соединения игры идут через выбранный сервер, а в режиме «Авто» через сервер с лучшим пингом.</p>
+      <p class="hint">Пинг меряется по UDP через сам сервер, так же как пойдут пакеты игры. Новые соединения идут через выбранный сервер, а в режиме «Авто» через сервер с лучшим пингом. Отключённые переключателем серверы не запускаются и никогда не выбираются.</p>
+      <div class="card">
+        <div class="card-head"><h3>Фильтры: отключить серверы по слову</h3><span class="muted" id="filter-count"></span></div>
+        <div class="chips" id="filter-chips"></div>
+        <div class="row">
+          <input id="filter-input" placeholder="например: Russia" style="flex:1">
+          <button class="btn" id="filter-add"><svg class="ic"><use href="#i-plus"/></svg>Добавить</button>
+        </div>
+        <div class="presets" id="filter-presets"></div>
+      </div>
       <div id="server-list" class="list"></div>
     </section>
 
@@ -177,6 +186,50 @@
           <small>Некоторые панели отдают разный формат в зависимости от него.</small>
         </label>
         <div class="row end"><button class="btn primary" id="opt-save">Сохранить</button></div>
+      </div>
+      <div class="card form">
+        <div class="card-head"><h3>Оформление</h3></div>
+        <div class="field">
+          <span>Цвет акцента</span>
+          <div class="accents" id="accent-list">
+            <button data-c="#10b981" aria-label="Изумрудный"></button>
+            <button data-c="#3b82f6" aria-label="Синий"></button>
+            <button data-c="#8b5cf6" aria-label="Фиолетовый"></button>
+            <button data-c="#ec4899" aria-label="Розовый"></button>
+            <button data-c="#f59e0b" aria-label="Янтарный"></button>
+            <button data-c="#ef4444" aria-label="Красный"></button>
+            <button data-c="#22d3ee" aria-label="Бирюзовый"></button>
+          </div>
+        </div>
+        <label class="field">
+          <span>Длина графиков</span>
+          <select id="ui-chart"><option value="60">1 минута</option><option value="120">2 минуты</option><option value="300">5 минут</option></select>
+        </label>
+        <div class="field">
+          <span>Цвет пинга: зелёный до, жёлтый до (мс), дальше красный</span>
+          <div class="row"><input id="ui-good" type="number" min="1" style="width:110px"><input id="ui-mid" type="number" min="2" style="width:110px"></div>
+        </div>
+        <label class="field check">
+          <input type="checkbox" id="ui-compact">
+          <span>Компактный режим<small>Меньше отступов, больше строк на экране.</small></span>
+        </label>
+        <div class="row end"><button class="btn primary" id="ui-save">Сохранить</button></div>
+      </div>
+      <div class="card form">
+        <div class="card-head"><h3>Запуск</h3></div>
+        <label class="field check">
+          <input type="checkbox" id="opt-autostart">
+          <span>Запускать вместе с Windows<small>Через Планировщик задач с правами администратора, без окна UAC при входе.</small></span>
+        </label>
+        <label class="field check">
+          <input type="checkbox" id="opt-minimized">
+          <span>Запускать свёрнутым</span>
+        </label>
+        <label class="field">
+          <span>Частота замера пинга своих relay</span>
+          <select id="opt-probe"><option value="100">10 раз в секунду</option><option value="250">4 раза в секунду</option><option value="500">2 раза в секунду</option><option value="1000">раз в секунду</option></select>
+        </label>
+        <div class="row end"><button class="btn primary" id="startup-save">Сохранить</button></div>
       </div>
       <div class="card form">
         <div class="card-head"><h3>Свои relay-серверы</h3></div>

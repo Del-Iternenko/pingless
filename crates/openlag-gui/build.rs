@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 fn main() {
     copy_runtime_files();
-    tauri_build::build()
+    let windows = tauri_build::WindowsAttributes::new().app_manifest(include_str!("app.manifest"));
+    tauri_build::try_build(tauri_build::Attributes::new().windows_attributes(windows))
+        .expect("tauri build failed");
 }
 
 /// Puts xray and WinDivert next to the built exe so `cargo run` works like an install.
@@ -15,7 +17,7 @@ fn copy_runtime_files() {
         return;
     };
     for (src, name) in [
-        ("xray/xray.exe", "xray.exe"),
+        ("xray/xray.exe", "openlag-xray.exe"),
         ("WinDivert-2.2.2-A/x64/WinDivert.dll", "WinDivert.dll"),
         ("WinDivert-2.2.2-A/x64/WinDivert64.sys", "WinDivert64.sys"),
     ] {

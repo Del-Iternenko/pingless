@@ -25,6 +25,15 @@ pub struct Settings {
     pub bypass_tun: bool,
     /// Server keys the user switched off: never started, never picked by "auto".
     pub disabled_servers: Vec<String>,
+    /// Servers whose name or address contains any of these words are off too. Unlike
+    /// keys, this survives subscription refreshes that rename or add servers.
+    pub disabled_keywords: Vec<String>,
+    /// Latency probe interval for our own relays, ms.
+    pub probe_interval_ms: u64,
+    /// Start with Windows (scheduled task with highest privileges).
+    pub autostart: bool,
+    pub start_minimized: bool,
+    pub ui: UiPrefs,
     /// Pre-groups versions stored a flat list here; migrated on load.
     #[serde(skip_serializing)]
     games: Vec<String>,
@@ -49,6 +58,11 @@ impl Default for Settings {
             auto_connect: false,
             bypass_tun: true,
             disabled_servers: Vec::new(),
+            disabled_keywords: Vec::new(),
+            probe_interval_ms: 250,
+            autostart: false,
+            start_minimized: false,
+            ui: UiPrefs::default(),
             games: Vec::new(),
             multipath: 2,
             tunnel_existing: false,
@@ -61,6 +75,32 @@ impl Default for Settings {
                 rand::random::<u64>(),
                 rand::random::<u64>()
             ),
+        }
+    }
+}
+
+/// Look-and-feel options; only the UI reads them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiPrefs {
+    /// Accent colour, `#rrggbb`.
+    pub accent: String,
+    /// Seconds of history on the charts.
+    pub chart_seconds: u32,
+    /// Ping below this is green, below `ping_mid` yellow, above red.
+    pub ping_good: u32,
+    pub ping_mid: u32,
+    pub compact: bool,
+}
+
+impl Default for UiPrefs {
+    fn default() -> Self {
+        UiPrefs {
+            accent: "#10b981".into(),
+            chart_seconds: 120,
+            ping_good: 60,
+            ping_mid: 120,
+            compact: false,
         }
     }
 }
@@ -94,6 +134,18 @@ impl Settings {
 
     pub fn all_except(&self) -> bool {
         self.mode == "all_except"
+    }
+
+    /// Why a server is switched off, or None if it may be used.
+    pub fn server_disabled(&self, key: &str, srv: &ProxyServer) -> Option<String> {
+        if self.disabled_servers.iter().any(|k| k == key) {
+            return Some("отключён вручную".into());
+        }
+        let text = format!("{} {}", srv.name, srv.address).to_lowercase();
+        self.disabled_keywords
+            .iter()
+            .find(|w| !w.trim().is_empty() && text.contains(&w.trim().to_lowercase()))
+            .map(|w| format!("фильтр «{}»", w.trim()))
     }
 }
 

@@ -28,7 +28,7 @@
     "targets": ["nsis"],
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
     "resources": {
-      "../../vendor/xray/xray.exe": "xray.exe",
+      "../../vendor/xray/xray.exe": "openlag-xray.exe",
       "../../vendor/xray/LICENSE": "licenses/xray-LICENSE.txt",
       "../../vendor/WinDivert-2.2.2-A/x64/WinDivert.dll": "WinDivert.dll",
       "../../vendor/WinDivert-2.2.2-A/x64/WinDivert64.sys": "WinDivert64.sys",

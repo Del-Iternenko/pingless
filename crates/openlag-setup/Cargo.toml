@@ -1,0 +1,26 @@
+[package]
+name = "openlag-setup"
+description = "OpenLag installer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "openlag-setup"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json = "1"
+tauri = "2"
+tauri-plugin-dialog = "2"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[build-dependencies]
+tauri-build = "2"
+zip = { version = "9", default-features = false, features = ["deflate"] }

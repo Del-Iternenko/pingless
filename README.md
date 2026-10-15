@@ -71,6 +71,19 @@ cargo build --release
 cargo test --workspace
 ```
 
+Installer (`dist/OpenLag-Setup-<version>.exe`) with the app, WinDivert, xray-core and the
+WebView2 bootstrapper inside:
+
+```powershell
+# vendor\xray\xray.exe and vendor\WinDivert-2.2.2-A must exist;
+# vendor\setup\music.mp3 is optional background music for the installer.
+.\scripts\build-installer.ps1
+```
+
+The bundled xray is renamed to `openlag-xray.exe`: some VPN clients (Happ) kill every
+`xray.exe` when they disconnect. OpenLag also restarts xray if it dies and logs to
+`%APPDATA%\dev.openlag.app\openlag.log`.
+
 Crates:
 
 | crate | what |
@@ -80,6 +93,8 @@ Crates:
 | `openlag-core` | client engine: routes, probing, selection, multipath |
 | `openlag-capture` | Windows packet capture and injection (WinDivert) |
 | `openlag-cli` | `openlag` command-line client |
+| `openlag-gui` | desktop app (Tauri) |
+| `openlag-setup` | installer and uninstaller |
 
 See [docs/design.md](docs/design.md) for how it works and which edge cases it handles.
 

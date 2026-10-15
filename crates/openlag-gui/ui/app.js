@@ -3,7 +3,9 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
-const HISTORY = 120; // seconds kept for charts
+let HISTORY = 120; // seconds shown on charts (settings: ui.chart_seconds)
+const HISTORY_MAX = 300;
+const FILTER_PRESETS = ["Russia", "Белые списки", "Auto", "Торренты", "YouTube", "AI"];
 const COLORS = ["#10b981", "#6366f1", "#f59e0b", "#ec4899", "#22d3ee"];
 const PRESETS = ["cs2.exe", "dota2.exe", "r5apex.exe", "RobloxPlayerBeta.exe", "FortniteClient-Win64-Shipping.exe", "GTA5.exe", "RustClient.exe", "deadlock.exe"];
 
@@ -61,7 +63,20 @@ async function call(cmd, args, okMsg) {
 
 async function refreshState() {
   state = await invoke("get_state");
+  applyUi();
   renderAll();
+}
+
+// Accent colour, compact mode, chart length from settings.
+function applyUi() {
+  const ui = state.settings.ui;
+  const hex = /^#[0-9a-f]{6}$/i.test(ui.accent) ? ui.accent : "#10b981";
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const root = document.documentElement.style;
+  root.setProperty("--accent", hex);
+  root.setProperty("--accent-soft", `rgba(${r}, ${g}, ${b}, 0.14)`);
+  document.body.classList.toggle("compact", !!ui.compact);
+  HISTORY = Math.min(HISTORY_MAX, ui.chart_seconds || 120);
 }
 
 // ---------------------------------------------------------------- helpers
@@ -72,9 +87,14 @@ function displayName(key) {
   return s ? s.name : key;
 }
 
+function accentColor() {
+  return state?.settings.ui.accent || "#10b981";
+}
+
 function pingClass(ms) {
   if (ms == null) return "";
-  return ms < 60 ? "good" : ms < 120 ? "mid" : "bad";
+  const ui = state?.settings.ui ?? { ping_good: 60, ping_mid: 120 };
+  return ms < ui.ping_good ? "good" : ms < ui.ping_mid ? "mid" : "bad";
 }
 
 function fmtMs(v) { return v == null ? "—" : Math.round(v).toString(); }
@@ -176,7 +196,7 @@ function renderHome() {
   if (key) keys.push(key);
   const others = [...exits()].filter(([k, p]) => p.alive && k !== key).sort((a, b) => a[1].srtt_ms - b[1].srtt_ms).slice(0, 2);
   for (const [k] of others) keys.push(k);
-  const series = keys.map((k, i) => ({ key: k, color: COLORS[i], values: (history.get(k) ?? []).map((h) => h.rtt) }));
+  const series = keys.map((k, i) => ({ key: k, color: i ? COLORS[i] : accentColor(), values: (history.get(k) ?? []).map((h) => h.rtt) }));
   $("chart-title").textContent = key ? `· ${displayName(key)}` : "";
   $("legend").innerHTML = series.map((s) => `<span><i style="background:${s.color}"></i>${esc(displayName(s.key))}</span>`).join("");
   Chart.line($("chart-ping"), series, { points: HISTORY, minMax: 20 });
@@ -209,11 +229,13 @@ function renderServers() {
   const ex = exits();
   const pref = state.settings.preferred_exit;
   $("auto-btn").classList.toggle("on", !pref);
+  renderFilters();
   const rows = [
-    ...state.servers.map((s) => ({ key: s.key, name: s.name, sub: `${s.subscription} · ${s.address}:${s.port}`, proto: s.protocol })),
-    ...state.relay_names.map((n) => ({ key: n, name: n, sub: "свой relay", proto: "openlag" })),
+    ...state.servers.map((s) => ({ key: s.key, name: s.name, sub: `${s.subscription} · ${s.address}:${s.port}`, proto: s.protocol, off: s.disabled })),
+    ...state.relay_names.map((n) => ({ key: n, name: n, sub: "свой relay", proto: "openlag", off: null })),
   ].filter((r) => !filter || (r.name + r.sub).toLowerCase().includes(filter));
   rows.sort((a, b) => {
+    if (!!a.off !== !!b.off) return a.off ? 1 : -1;
     const pa = ex.get(a.key), pb = ex.get(b.key);
     const va = pa?.alive ? pa.srtt_ms : 1e9, vb = pb?.alive ? pb.srtt_ms : 1e9;
     return va - vb;
@@ -224,27 +246,37 @@ function renderServers() {
   }
   $("server-list").innerHTML = rows
     .map((r) => {
-      const p = ex.get(r.key);
-      const error = state.server_errors[r.key];
-      const status = error ? "dead" : p?.alive ? "alive" : "";
+      const p = r.off ? null : ex.get(r.key);
+      const error = r.off ? null : state.server_errors[r.key];
+      const status = r.off ? "" : error ? "dead" : p?.alive ? "alive" : "";
       const ping = p?.alive ? p.srtt_ms : null;
       const selected = pref === r.key;
-      return `<div class="srv ${selected ? "selected" : ""}" data-key="${esc(r.key)}">
+      const byFilter = r.off && r.off.startsWith("фильтр");
+      const isRelay = r.proto === "openlag";
+      const sub = r.off ? `<span class="muted">Отключён · ${esc(r.off)}</span>` : error ? `<span class="err-text">${esc(error)}</span>` : esc(r.sub);
+      return `<div class="srv ${selected ? "selected" : ""} ${r.off ? "off" : ""}" data-key="${esc(r.key)}">
         <div class="dot ${status}"></div>
         <div style="min-width:0"><div class="name">${esc(r.name)}<span class="badge">${esc(r.proto)}</span></div>
-          <div class="sub">${error ? `<span class="err-text">${esc(error)}</span>` : esc(r.sub)}</div></div>
-        <div class="metric ${pingClass(ping)}">${ping == null ? (error ? "ошибка" : p ? "нет ответа" : "…") : `${fmtMs(ping)} мс`}<small>пинг</small></div>
+          <div class="sub">${sub}</div></div>
+        <div class="metric ${pingClass(ping)}">${r.off ? "—" : ping == null ? (error ? "ошибка" : p ? "нет ответа" : "…") : `${fmtMs(ping)} мс`}<small>пинг</small></div>
         <div class="metric">${p?.alive ? p.jitter_ms.toFixed(1) : "—"}<small>джиттер</small></div>
         <div class="metric">${p ? p.loss_pct.toFixed(0) + "%" : "—"}<small>потери</small></div>
         <canvas class="spark"></canvas>
-        <button class="btn ${selected ? "on" : ""}" ${error ? "disabled" : ""}>${selected ? icon("check") + "Выбран" : "Выбрать"}</button>
+        <div class="srv-actions">
+          ${isRelay ? "" : `<label class="switch" title="${byFilter ? "Отключён фильтром: уберите слово в фильтрах выше" : "Включить / отключить сервер"}"><input type="checkbox" data-act="enable" ${r.off ? "" : "checked"} ${byFilter ? "disabled" : ""}><span></span></label>`}
+          <button class="btn ${selected ? "on" : ""}" data-act="pick" ${error || r.off ? "disabled" : ""}>${selected ? icon("check") + "Выбран" : "Выбрать"}</button>
+        </div>
       </div>`;
     })
     .join("");
   $("server-list").querySelectorAll(".srv").forEach((el) => {
     const key = el.dataset.key;
-    Chart.spark(el.querySelector("canvas"), (history.get(key) ?? []).slice(-40).map((h) => h.rtt), "#10b981");
-    el.querySelector("button").addEventListener("click", async () => {
+    Chart.spark(el.querySelector("canvas"), (history.get(key) ?? []).slice(-40).map((h) => h.rtt), accentColor());
+    el.querySelector('[data-act="enable"]')?.addEventListener("change", async (e) => {
+      await call("set_server_enabled", { key, enabled: e.target.checked }, e.target.checked ? `${displayName(key)}: включён` : `${displayName(key)}: отключён`);
+      await refreshState();
+    });
+    el.querySelector('[data-act="pick"]').addEventListener("click", async () => {
       const next = state.settings.preferred_exit === key ? null : key;
       await call("set_preferred", { key: next }, next ? `Новые соединения пойдут через ${displayName(key)}` : "Автовыбор сервера");
       await refreshState();
@@ -252,6 +284,31 @@ function renderServers() {
   });
 }
 
+function renderFilters() {
+  const words = state.settings.disabled_keywords;
+  const off = state.servers.filter((s) => s.disabled).length;
+  $("filter-count").textContent = off ? `отключено серверов: ${off} из ${state.servers.length}` : "";
+  $("filter-chips").innerHTML = words.length
+    ? words.map((w) => `<span class="chip">${esc(w)}<button data-w="${esc(w)}" aria-label="Убрать фильтр">${icon("x")}</button></span>`).join("")
+    : `<span class="hint">Нет фильтров. Серверы со словом из списка в названии или адресе отключаются целиком и не выбираются в «Авто», даже после обновления подписки.</span>`;
+  $("filter-chips").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => setFilters(words.filter((w) => w !== b.dataset.w))));
+  $("filter-presets").innerHTML = FILTER_PRESETS.filter((p) => !words.some((w) => w.toLowerCase() === p.toLowerCase()))
+    .map((p) => `<button data-p="${esc(p)}">+ ${esc(p)}</button>`).join("");
+  $("filter-presets").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => setFilters([...words, b.dataset.p])));
+}
+
+async function setFilters(words) {
+  await call("set_filters", { keywords: words });
+  await refreshState();
+}
+
+$("filter-add").addEventListener("click", () => {
+  const w = $("filter-input").value.trim();
+  if (!w) return;
+  $("filter-input").value = "";
+  setFilters([...state.settings.disabled_keywords, w]);
+});
+$("filter-input").addEventListener("keydown", (e) => e.key === "Enter" && $("filter-add").click());
 $("server-filter").addEventListener("input", renderServers);
 $("auto-btn").addEventListener("click", async () => {
   await call("set_preferred", { key: null }, "Автовыбор: сервер с лучшим пингом");
@@ -459,8 +516,16 @@ function renderSettings() {
     $("opt-ua").value = s.user_agent;
     $("opt-bypass").checked = s.bypass_tun;
     $("opt-relays").value = s.relays_toml;
+    $("opt-autostart").checked = s.autostart;
+    $("opt-minimized").checked = s.start_minimized;
+    $("opt-probe").value = String(s.probe_interval_ms);
+    $("ui-chart").value = String(s.ui.chart_seconds);
+    $("ui-good").value = s.ui.ping_good;
+    $("ui-mid").value = s.ui.ping_mid;
+    $("ui-compact").checked = s.ui.compact;
     settingsFilled = true;
   }
+  $("accent-list").querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.c.toLowerCase() === s.ui.accent.toLowerCase()));
   const yes = (b) => (b ? `<span class="good">есть</span>` : `<span class="bad">нет</span>`);
   $("sys-info").innerHTML = `
     <span class="muted">Права администратора</span><span>${yes(state.admin)}</span>
@@ -473,6 +538,27 @@ function renderSettings() {
 
 $("opt-save").addEventListener("click", async () => {
   await call("set_options", { multipath: Number($("opt-multipath").value), tunnelExisting: $("opt-existing").checked, userAgent: $("opt-ua").value, bypassTun: $("opt-bypass").checked }, "Сохранено");
+  await refreshState();
+});
+async function saveUi(patch) {
+  const ui = { ...state.settings.ui, ...patch };
+  await call("set_ui_prefs", { ui });
+  await refreshState();
+}
+$("accent-list").querySelectorAll("button").forEach((b) => {
+  b.style.background = b.dataset.c;
+  b.addEventListener("click", () => saveUi({ accent: b.dataset.c }));
+});
+$("ui-save").addEventListener("click", () => {
+  const good = Math.max(1, Number($("ui-good").value) || 60);
+  const mid = Math.max(good + 1, Number($("ui-mid").value) || 120);
+  saveUi({ chart_seconds: Number($("ui-chart").value), ping_good: good, ping_mid: mid, compact: $("ui-compact").checked });
+  toast("Оформление сохранено", "ok");
+});
+$("startup-save").addEventListener("click", async () => {
+  try {
+    await call("set_startup", { autostart: $("opt-autostart").checked, startMinimized: $("opt-minimized").checked, probeMs: Number($("opt-probe").value) }, "Сохранено");
+  } catch { /* toast */ }
   await refreshState();
 });
 $("relays-save").addEventListener("click", async () => {
@@ -514,12 +600,13 @@ listen("tick", (e) => {
   for (const [k, p] of exits()) {
     const h = history.get(k) ?? [];
     h.push({ rtt: p.alive ? p.last_rtt_ms ?? p.srtt_ms : null, loss: p.loss_pct });
-    if (h.length > HISTORY) h.shift();
+    if (h.length > HISTORY_MAX) h.shift();
     history.set(k, h);
   }
   const page = document.querySelector(".page.active").id;
   if (page === "page-home") renderHome();
-  if (page === "page-servers") renderServers();
+  // Don't rebuild the list under the cursor: clicks would land on replaced nodes.
+  if (page === "page-servers" && !$("server-list").matches(":hover")) renderServers();
 });
 
 window.addEventListener("resize", renderAll);
