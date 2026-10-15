@@ -3,10 +3,10 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/openlag/openlag"
+repository = "https://github.com/Del-Iternenko/openlag"
 
 [workspace.dependencies]
 openlag-proto = { path = "crates/openlag-proto" }

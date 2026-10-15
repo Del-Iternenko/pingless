@@ -2,7 +2,14 @@ use std::path::PathBuf;
 
 fn main() {
     copy_runtime_files();
-    let windows = tauri_build::WindowsAttributes::new().app_manifest(include_str!("app.manifest"));
+    // Release builds always ask for Administrator (packet capture needs it); debug
+    // builds stay unelevated so `cargo test` can run the test binary.
+    let manifest = if std::env::var("PROFILE").as_deref() == Ok("release") {
+        include_str!("app.manifest")
+    } else {
+        include_str!("app.dev.manifest")
+    };
+    let windows = tauri_build::WindowsAttributes::new().app_manifest(manifest);
     tauri_build::try_build(tauri_build::Attributes::new().windows_attributes(windows))
         .expect("tauri build failed");
 }

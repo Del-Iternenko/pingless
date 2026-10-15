@@ -35,6 +35,8 @@ pub struct Settings {
     pub start_minimized: bool,
     /// The window's close button hides OpenLag to the tray instead of quitting.
     pub close_to_tray: bool,
+    /// Look for new releases on GitHub.
+    pub auto_update: bool,
     pub ui: UiPrefs,
     /// Pre-groups versions stored a flat list here; migrated on load.
     #[serde(skip_serializing)]
@@ -65,6 +67,7 @@ impl Default for Settings {
             autostart: false,
             start_minimized: false,
             close_to_tray: true,
+            auto_update: true,
             ui: UiPrefs::default(),
             games: Vec::new(),
             multipath: 2,

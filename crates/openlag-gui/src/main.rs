@@ -3,6 +3,7 @@
 mod settings;
 mod sys;
 mod tray;
+mod update;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -78,6 +79,7 @@ struct StateView {
     xray: bool,
     capturing: bool,
     bind_interface: Option<String>,
+    version: &'static str,
 }
 
 #[derive(Serialize, Clone)]
@@ -131,6 +133,7 @@ impl AppState {
             xray: self.xray_exe.is_some(),
             capturing: net.capture.is_some(),
             bind_interface: net.bind_interface.clone(),
+            version: update::CURRENT,
         }
     }
 
@@ -673,8 +676,13 @@ async fn set_startup(
     start_minimized: bool,
     probe_ms: u64,
     close_to_tray: bool,
+    auto_update: bool,
 ) -> CmdResult<()> {
-    st.settings.lock().close_to_tray = close_to_tray;
+    {
+        let mut s = st.settings.lock();
+        s.close_to_tray = close_to_tray;
+        s.auto_update = auto_update;
+    }
     let rebuild = {
         let mut s = st.settings.lock();
         s.start_minimized = start_minimized;
@@ -772,6 +780,7 @@ fn main() {
                 state.rebuild().await;
                 tauri::async_runtime::spawn(auto_refresh(state.clone()));
                 tauri::async_runtime::spawn(auto_connect(state.clone(), handle.clone()));
+                tauri::async_runtime::spawn(auto_update_check(state.clone(), handle.clone()));
                 loop {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     // Skip a tick while a rebuild holds the lock.
@@ -844,6 +853,8 @@ fn main() {
             start,
             stop,
             relaunch_admin,
+            check_update,
+            install_update,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build OpenLag")
@@ -977,4 +988,46 @@ fn init_log() {
             .init(),
     }
     std::panic::set_hook(Box::new(|p| tracing::error!("panic: {p}")));
+}
+
+#[tauri::command]
+async fn check_update() -> CmdResult<update::UpdateInfo> {
+    update::check().await.map_err(err)
+}
+
+/// Downloads the new installer, releases WinDivert and xray, and hands over to it.
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle, st: Shared<'_>) -> CmdResult<()> {
+    let info = update::check().await.map_err(err)?;
+    if !info.available {
+        return Err(format!("already up to date ({})", info.current));
+    }
+    let setup = update::download(&app, &info).await.map_err(err)?;
+    info!("installing update {} from {}", info.latest, setup.display());
+    st.shutdown().await;
+    std::process::Command::new(&setup)
+        .arg("--update")
+        .spawn()
+        .map_err(|e| format!("cannot start the installer: {e}"))?;
+    tray::QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
+    app.exit(0);
+    Ok(())
+}
+
+/// Checks GitHub for a newer release 20 s after start and then every 6 hours.
+async fn auto_update_check(st: Arc<AppState>, handle: tauri::AppHandle) {
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    loop {
+        if st.settings.lock().auto_update {
+            match update::check().await {
+                Ok(info) if info.available => {
+                    info!("update available: {} -> {}", info.current, info.latest);
+                    let _ = handle.emit("update-available", info);
+                }
+                Ok(_) => {}
+                Err(e) => tracing::debug!("update check: {e:#}"),
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
+    }
 }

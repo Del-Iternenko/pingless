@@ -39,10 +39,11 @@ fn main() {
     println!("cargo:rerun-if-env-changed=OPENLAG_SETUP_MUSIC");
     println!("cargo:rerun-if-changed={}", music.display());
     let dest = manifest.join("ui/music.mp3");
-    if music.exists() {
+    // OPENLAG_SETUP_MUSIC=none builds the public installer without a track (the UI
+    // then plays music.mp3 found next to the exe, or hides the player).
+    if std::env::var("OPENLAG_SETUP_MUSIC").as_deref() != Ok("none") && music.exists() {
         let _ = std::fs::copy(&music, &dest);
-    } else if !dest.exists() {
-        // The UI hides the player when the track is empty.
+    } else {
         let _ = File::create(&dest);
     }
 

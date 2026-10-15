@@ -159,8 +159,10 @@ function renderAlerts() {
   const selected = activeProcesses().length;
   if (state.settings.mode === "only" && !selected) a.push(["warn", "Не выбраны процессы.", `<button class="btn" data-go="procs">${icon("cpu")}Выбрать процессы</button>`]);
   if (state.net_error) a.push(["error", ru(state.net_error), ""]);
-  $("alerts").innerHTML = a.map(([k, t, b]) => `<div class="alert ${k === "error" ? "error" : ""}">${icon("shield")}<span>${esc(t)}</span>${b}</div>`).join("");
+  if (updateInfo?.available) a.push(["update", `Доступна новая версия OpenLag ${updateInfo.latest} (у вас ${updateInfo.current}).`, `<button class="btn primary" id="do-update">${icon("refresh")}Обновить</button>`]);
+  $("alerts").innerHTML = a.map(([k, t, b]) => `<div class="alert ${k === "error" || k === "update" ? k : ""}">${icon("shield")}<span>${esc(t)}</span>${b}</div>`).join("");
   $("relaunch")?.addEventListener("click", () => call("relaunch_admin"));
+  $("do-update")?.addEventListener("click", installUpdate);
   document.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => document.querySelector(`.nav[data-page="${b.dataset.go}"]`).click()));
 }
 
@@ -519,6 +521,7 @@ function renderSettings() {
     $("opt-autostart").checked = s.autostart;
     $("opt-minimized").checked = s.start_minimized;
     $("opt-tray").checked = s.close_to_tray;
+    $("opt-update").checked = s.auto_update;
     $("opt-probe").value = String(s.probe_interval_ms);
     $("ui-chart").value = String(s.ui.chart_seconds);
     $("ui-good").value = s.ui.ping_good;
@@ -528,6 +531,7 @@ function renderSettings() {
   }
   $("accent-list").querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.c.toLowerCase() === s.ui.accent.toLowerCase()));
   const yes = (b) => (b ? `<span class="good">есть</span>` : `<span class="bad">нет</span>`);
+  $("ver-info").textContent = `Версия ${state.version}` + (updateInfo?.available ? ` · доступна ${updateInfo.latest}` : "");
   $("sys-info").innerHTML = `
     <span class="muted">Права администратора</span><span>${yes(state.admin)}</span>
     <span class="muted">WinDivert</span><span>${yes(state.windivert)}</span>
@@ -558,7 +562,7 @@ $("ui-save").addEventListener("click", () => {
 });
 $("startup-save").addEventListener("click", async () => {
   try {
-    await call("set_startup", { autostart: $("opt-autostart").checked, startMinimized: $("opt-minimized").checked, probeMs: Number($("opt-probe").value), closeToTray: $("opt-tray").checked }, "Сохранено");
+    await call("set_startup", { autostart: $("opt-autostart").checked, startMinimized: $("opt-minimized").checked, probeMs: Number($("opt-probe").value), closeToTray: $("opt-tray").checked, autoUpdate: $("opt-update").checked }, "Сохранено");
   } catch { /* toast */ }
   await refreshState();
 });
@@ -589,6 +593,46 @@ function renderAll() {
   if (page === "page-procs") renderProcsPage();
   if (page === "page-settings") renderSettings();
 }
+
+// ---------------------------------------------------------------- updates
+
+let updateInfo = null;
+let updating = false;
+
+async function installUpdate() {
+  if (updating) return;
+  updating = true;
+  const btn = $("do-update");
+  if (btn) btn.disabled = true;
+  toast(`Скачиваю OpenLag ${updateInfo?.latest ?? ""}…`, "ok");
+  try {
+    await invoke("install_update");
+  } catch (e) {
+    toast(e, "error");
+    updating = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
+listen("update-available", (e) => {
+  updateInfo = e.payload;
+  renderAll();
+});
+listen("update-progress", (e) => {
+  const btn = $("do-update");
+  if (btn) btn.lastChild.textContent = `Загрузка ${e.payload}%`;
+});
+
+$("check-update").addEventListener("click", async () => {
+  try {
+    const info = await invoke("check_update");
+    updateInfo = info;
+    toast(info.available ? `Доступна версия ${info.latest}` : `У вас последняя версия (${info.current})`, "ok");
+    renderAll();
+  } catch (e) {
+    toast(`Не удалось проверить обновления: ${e}`, "error");
+  }
+});
 
 listen("refresh", () => refreshState());
 listen("notify", (e) => toast(e.payload, "error"));

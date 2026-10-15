@@ -229,6 +229,11 @@
           <input type="checkbox" id="opt-tray">
           <span>Крестик сворачивает в трей<small>OpenLag продолжит работать: иконка у часов, левый клик открывает окно, правый даёт меню с переключателем и выбором сервера. «Выход» в меню трея закрывает программу совсем.</small></span>
         </label>
+        <label class="field check">
+          <input type="checkbox" id="opt-update">
+          <span>Проверять обновления<small>Раз в 6 часов OpenLag смотрит последний релиз на GitHub. Обновление ставится только по вашей кнопке.</small></span>
+        </label>
+        <div class="row"><span class="hint" id="ver-info"></span><span style="flex:1"></span><button class="btn" id="check-update">Проверить сейчас</button></div>
         <label class="field">
           <span>Частота замера пинга своих relay</span>
           <select id="opt-probe"><option value="100">10 раз в секунду</option><option value="250">4 раза в секунду</option><option value="500">2 раза в секунду</option><option value="1000">раз в секунду</option></select>

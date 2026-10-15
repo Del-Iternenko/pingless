@@ -41,6 +41,10 @@ struct Info {
     core_mb: f64,
     extras_mb: f64,
     github: &'static str,
+    /// For `--update`: what the existing installation has, to keep it as it was.
+    keep_desktop: bool,
+    keep_start_menu: bool,
+    keep_autostart: bool,
 }
 
 #[derive(Deserialize)]
@@ -60,6 +64,11 @@ struct Progress {
 
 fn uninstall_mode() -> bool {
     std::env::args().any(|a| a == "--uninstall")
+}
+
+/// Started by OpenLag's updater: reinstall in place without asking anything.
+fn update_mode() -> bool {
+    std::env::args().any(|a| a == "--update")
 }
 
 fn program_files() -> PathBuf {
@@ -83,9 +92,15 @@ fn info() -> Info {
     Info {
         mode: if uninstall_mode() {
             "uninstall"
+        } else if update_mode() && installed.is_some() {
+            "update"
         } else {
             "install"
         },
+        keep_desktop: public_desktop().join("OpenLag.lnk").exists(),
+        keep_start_menu: start_menu_dir().join("OpenLag.lnk").exists(),
+        keep_autostart: hidden("schtasks", &["/Query", "/TN", "OpenLag"])
+            .is_ok_and(|o| o.status.success()),
         version: VERSION,
         default_dir: installed
             .clone()
@@ -465,11 +480,29 @@ fn shell_open(url: &str) {
     }
 }
 
+/// `music.mp3` next to the installer, if any: the public build has no music inside,
+/// but whoever has a track can drop it beside the exe.
+#[tauri::command]
+fn external_music() -> tauri::ipc::Response {
+    let data = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("music.mp3")))
+        .and_then(|p| std::fs::read(p).ok())
+        .unwrap_or_default();
+    tauri::ipc::Response::new(data)
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            info, pick_dir, open_url, launch, install, uninstall
+            info,
+            pick_dir,
+            open_url,
+            launch,
+            install,
+            uninstall,
+            external_music
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the installer");

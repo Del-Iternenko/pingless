@@ -99,6 +99,7 @@ input[type="search"] { width: 200px; }
 }
 .alert.error { background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.35); color: #fca5a5; }
 .alert span { flex: 1; }
+.alert.update { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
 
 /* Hero */
 .hero { display: flex; align-items: center; gap: 28px; padding: 24px 28px; }

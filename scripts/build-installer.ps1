@@ -1,6 +1,10 @@
-# Builds dist\OpenLag-Setup-<version>.exe.
+# Builds the installers into dist\:
+#   OpenLag-Setup-<version>.exe        public, no music inside (plays music.mp3 found
+#                                      next to the exe, if any)
+#   OpenLag-Setup-<version>-Music.exe  with vendor\setup\music.mp3 inside; personal use
+#                                      only, never publish it (the track is not ours)
 # Needs vendor\xray\xray.exe and vendor\WinDivert-2.2.2-A (see README).
-# Optional: vendor\setup\music.mp3 (installer background music, not in git).
+param([ValidateSet('both', 'public', 'music')] [string] $Variant = 'both')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
@@ -41,13 +45,25 @@ if (-not (Test-Path $wv2)) {
 }
 Copy-Item $wv2 $extras
 
-Write-Host '== building installer'
-$env:OPENLAG_PAYLOAD = $payload
-$env:OPENLAG_PAYLOAD_STAMP = (Get-Date).Ticks
-Invoke-Cargo build --release -p openlag-setup
-
 $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
 New-Item -ItemType Directory -Force dist | Out-Null
-$out = "dist\OpenLag-Setup-$version.exe"
-Copy-Item (Join-Path $release 'openlag-setup.exe') $out -Force
-Write-Host "== done: $out ($([math]::Round((Get-Item $out).Length / 1MB, 1)) MB)"
+$env:OPENLAG_PAYLOAD = $payload
+$env:OPENLAG_PAYLOAD_STAMP = (Get-Date).Ticks
+
+function Build-Setup([string] $music, [string] $name) {
+    Write-Host "== building $name"
+    $env:OPENLAG_SETUP_MUSIC = $music
+    Invoke-Cargo build --release -p openlag-setup
+    $out = "dist\$name"
+    Copy-Item (Join-Path $release 'openlag-setup.exe') $out -Force
+    Write-Host "== done: $out ($([math]::Round((Get-Item $out).Length / 1MB, 1)) MB)"
+}
+
+if ($Variant -in 'both', 'public') {
+    Build-Setup 'none' "OpenLag-Setup-$version.exe"
+}
+if ($Variant -in 'both', 'music') {
+    $track = Join-Path $root 'vendor\setup\music.mp3'
+    if (Test-Path $track) { Build-Setup $track "OpenLag-Setup-$version-Music.exe" }
+    else { Write-Host "== skipping music build: $track not found" }
+}

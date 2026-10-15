@@ -12,6 +12,10 @@ const INSTALL_STEPS = [
   ["progress", "Установка"],
   ["done", "Готово"],
 ];
+const UPDATE_STEPS = [
+  ["progress", "Обновление"],
+  ["done", "Готово"],
+];
 const UNINSTALL_STEPS = [
   ["uninstall", "Удаление"],
   ["progress", "Процесс"],
@@ -56,6 +60,17 @@ function syncPlayer() {
 async function startMusic() {
   try { await music.play(); } catch { /* blocked until a click */ }
   syncPlayer();
+}
+
+// A music.mp3 next to the installer wins over the built-in track.
+async function loadMusic() {
+  try {
+    const buf = await invoke("external_music");
+    if (buf && buf.byteLength > 0) {
+      music.src = URL.createObjectURL(new Blob([buf], { type: "audio/mpeg" }));
+      $("player").hidden = false;
+    }
+  } catch { /* keep the built-in one */ }
 }
 music.addEventListener("play", syncPlayer);
 music.addEventListener("pause", syncPlayer);
@@ -148,6 +163,40 @@ $("go").addEventListener("click", async () => {
   }
 });
 
+// ---------------------------------------------------------------- update flow
+
+async function runUpdate() {
+  $("progress-title").textContent = `Обновление до ${info.version}…`;
+  showStep("progress");
+  startTips();
+  const opts = {
+    dir: info.installed_dir,
+    desktop: info.keep_desktop,
+    start_menu: info.keep_start_menu,
+    extras: true,
+    autostart: info.keep_autostart,
+  };
+  try {
+    await invoke("install", { opts });
+    clearInterval(tipTimer);
+    $("done-title").textContent = `OpenLag обновлён до ${info.version}`;
+    $("done-text").textContent = "Настройки, подписки и группы на месте. OpenLag сейчас запустится.";
+    showStep("done");
+    $("finish").onclick = () => win.close();
+    setTimeout(async () => {
+      try { await invoke("launch", { dir: opts.dir }); } catch (e) { showError(String(e)); return; }
+      win.close();
+    }, 2500);
+  } catch (e) {
+    clearInterval(tipTimer);
+    showError(`Обновление не удалось: ${e}`);
+    steps = INSTALL_STEPS;
+    $("dir").value = info.default_dir;
+    updateSpace();
+    showStep("options");
+  }
+}
+
 // ---------------------------------------------------------------- uninstall flow
 
 $("cancel-un").addEventListener("click", () => win.close());
@@ -219,9 +268,13 @@ $("go-un").addEventListener("click", async () => {
 (async () => {
   info = await invoke("info");
   $("ver").textContent = `v${info.version}`;
+  await loadMusic();
   if (info.mode === "uninstall") {
     steps = UNINSTALL_STEPS;
     showStep("uninstall");
+  } else if (info.mode === "update") {
+    steps = UPDATE_STEPS;
+    runUpdate();
   } else {
     $("dir").value = info.default_dir;
     updateSpace();
