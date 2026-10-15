@@ -67,7 +67,20 @@ pub fn server_from_config(cfg: &Value, name: &str) -> Result<ProxyServer> {
 }
 
 /// Xray config with one SOCKS inbound per server, routed to that server only.
+/// Options for running xray.
+#[derive(Debug, Clone, Default)]
+pub struct XrayOptions {
+    /// Send traffic to the servers through this interface (friendly name), bypassing
+    /// TUN adapters of other VPN clients.
+    pub bind_interface: Option<String>,
+}
+
+/// Xray config with one SOCKS inbound per server, routed to that server only.
 pub fn build_config(servers: &[(ProxyServer, u16)]) -> Value {
+    build_config_with(servers, &XrayOptions::default())
+}
+
+pub fn build_config_with(servers: &[(ProxyServer, u16)], opts: &XrayOptions) -> Value {
     let mut inbounds = Vec::new();
     let mut outbounds = Vec::new();
     let mut rules = Vec::new();
@@ -81,6 +94,12 @@ pub fn build_config(servers: &[(ProxyServer, u16)]) -> Value {
         }));
         let mut out = server.outbound.clone();
         out["tag"] = json!(format!("out-{i}"));
+        if let Some(iface) = &opts.bind_interface {
+            if !out.get("streamSettings").is_some_and(Value::is_object) {
+                out["streamSettings"] = json!({});
+            }
+            out["streamSettings"]["sockopt"]["interface"] = json!(iface);
+        }
         outbounds.push(out);
         rules.push(json!({ "type": "field", "inboundTag": [format!("in-{i}")], "outboundTag": format!("out-{i}") }));
     }
@@ -108,6 +127,15 @@ impl Xray {
     /// Validates every server on its own (a broken entry must not take down the
     /// rest), then starts one xray with all valid ones.
     pub async fn start(xray: &Path, work_dir: &Path, servers: &[ProxyServer]) -> Result<Xray> {
+        Self::start_with(xray, work_dir, servers, &XrayOptions::default()).await
+    }
+
+    pub async fn start_with(
+        xray: &Path,
+        work_dir: &Path,
+        servers: &[ProxyServer],
+        opts: &XrayOptions,
+    ) -> Result<Xray> {
         anyhow::ensure!(xray.exists(), "xray.exe not found at {}", xray.display());
         std::fs::create_dir_all(work_dir)?;
 
@@ -115,7 +143,7 @@ impl Xray {
         let mut set = tokio::task::JoinSet::new();
         for (i, s) in servers.iter().enumerate() {
             let path = work_dir.join(format!("check-{i}.json"));
-            let cfg = build_config(&[(s.clone(), 0)]);
+            let cfg = build_config_with(&[(s.clone(), 0)], opts);
             let xray = xray.to_path_buf();
             set.spawn(async move {
                 let r = test_config(&xray, &path, &cfg).await;
@@ -153,7 +181,7 @@ impl Xray {
         let cfg_path = work_dir.join("xray.json");
         std::fs::write(
             &cfg_path,
-            serde_json::to_vec_pretty(&build_config(&chosen))?,
+            serde_json::to_vec_pretty(&build_config_with(&chosen, opts))?,
         )?;
         let mut child = command(xray)
             .arg("run")

@@ -136,7 +136,7 @@ function renderAlerts() {
   if (!state.admin) a.push(["warn", "Без прав администратора перехват трафика не работает. Пинг до серверов меряется и так.", `<button class="btn" id="relaunch">${icon("shield")}Перезапустить от администратора</button>`]);
   if (!state.windivert) a.push(["error", "Нет WinDivert.dll / WinDivert64.sys рядом с OpenLag: перехват недоступен.", ""]);
   if (!state.servers.length && !state.relay_names.length) a.push(["warn", "Нет серверов. Добавьте подписку от VPN-сервиса.", `<button class="btn" data-go="subs">${icon("plus")}Добавить подписку</button>`]);
-  const selected = state.settings.groups.filter((g) => g.enabled).reduce((n, g) => n + g.processes.length, 0);
+  const selected = activeProcesses().length;
   if (state.settings.mode === "only" && !selected) a.push(["warn", "Не выбраны процессы.", `<button class="btn" data-go="procs">${icon("cpu")}Выбрать процессы</button>`]);
   if (state.net_error) a.push(["error", ru(state.net_error), ""]);
   $("alerts").innerHTML = a.map(([k, t, b]) => `<div class="alert ${k === "error" ? "error" : ""}">${icon("shield")}<span>${esc(t)}</span>${b}</div>`).join("");
@@ -150,7 +150,7 @@ function renderHome() {
   $("power").classList.toggle("busy", busy);
   $("hero-state").textContent = on ? "Оптимизация включена" : "Выключено";
   $("hero-state").classList.toggle("on", on);
-  const names = state.settings.groups.filter((g) => g.enabled).flatMap((g) => g.processes);
+  const names = activeProcesses();
   const what = state.settings.mode === "all_except"
     ? `весь трафик${names.length ? `, кроме ${names.length} процесс.` : ""}`
     : names.length ? names.slice(0, 4).join(", ") + (names.length > 4 ? ` и ещё ${names.length - 4}` : "") : "процессы не выбраны";
@@ -323,10 +323,23 @@ $("sub-add").addEventListener("click", async () => {
 
 let selectedGroup = null;
 
-function groups() { return state.settings.groups; }
+// Each mode has its own list: "tunnel these" and "never tunnel these" never mix.
+function groups() {
+  return state.settings.mode === "all_except" ? state.settings.exclude_groups : state.settings.groups;
+}
+function activeProcesses() {
+  return groups().filter((g) => g.enabled).flatMap((g) => g.processes);
+}
 
-async function saveSelection(gs = groups(), mode = state.settings.mode) {
-  try { await call("set_selection", { groups: gs, mode }); } catch { /* toast */ }
+async function saveSelection(gs = groups(), mode = state.settings.mode, autoConnect = state.settings.auto_connect) {
+  const cur = state.settings.mode;
+  const args = {
+    groups: cur === "only" ? gs : state.settings.groups,
+    excludeGroups: cur === "all_except" ? gs : state.settings.exclude_groups,
+    mode,
+    autoConnect,
+  };
+  try { await call("set_selection", args); } catch { /* toast */ }
   await refreshState();
 }
 
@@ -346,10 +359,12 @@ function addToGroup(id, names) {
 function renderProcsPage() {
   const mode = state.settings.mode;
   document.querySelectorAll("#mode-seg button").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
-  const n = state.settings.groups.filter((g) => g.enabled).reduce((a, g) => a + g.processes.length, 0);
+  const n = activeProcesses().length;
   $("mode-hint").textContent = mode === "all_except"
-    ? `Через туннель идёт весь трафик компьютера, кроме процессов из включённых групп (${n}). Локальная сеть всегда идёт напрямую.`
-    : `Через туннель идут только процессы из включённых групп (${n}). Остальное работает напрямую, без VPN и без TUN.`;
+    ? `Через туннель идёт весь трафик компьютера, кроме процессов из включённых групп ниже (${n}). Локальная сеть всегда идёт напрямую. У этого режима свой список.`
+    : `Через туннель идут только процессы из включённых групп ниже (${n}). Остальное работает напрямую, без VPN и без TUN. У этого режима свой список.`;
+  $("auto-wrap").hidden = mode !== "only";
+  $("auto-connect").checked = !!state.settings.auto_connect;
 
   const gs = groups();
   if (!gs.some((g) => g.id === selectedGroup)) selectedGroup = gs[0]?.id ?? null;
@@ -426,8 +441,10 @@ document.querySelectorAll("#mode-seg button").forEach((b) => b.addEventListener(
 $("group-new").addEventListener("click", () => {
   const id = Math.random().toString(16).slice(2, 10);
   selectedGroup = id;
-  saveSelection([...groups(), { id, name: groups().length ? `Группа ${groups().length + 1}` : "Игры", enabled: true, processes: [] }]);
+  const first = state.settings.mode === "all_except" ? "Не через VPN" : "Через VPN";
+  saveSelection([...groups(), { id, name: groups().length ? `Группа ${groups().length + 1}` : first, enabled: true, processes: [] }]);
 });
+$("auto-connect").addEventListener("change", (e) => saveSelection(groups(), state.settings.mode, e.target.checked));
 $("proc-filter").addEventListener("input", renderProcs);
 $("proc-refresh").addEventListener("click", loadProcesses);
 
@@ -440,6 +457,7 @@ function renderSettings() {
     $("opt-multipath").value = String(s.multipath);
     $("opt-existing").checked = s.tunnel_existing;
     $("opt-ua").value = s.user_agent;
+    $("opt-bypass").checked = s.bypass_tun;
     $("opt-relays").value = s.relays_toml;
     settingsFilled = true;
   }
@@ -448,12 +466,13 @@ function renderSettings() {
     <span class="muted">Права администратора</span><span>${yes(state.admin)}</span>
     <span class="muted">WinDivert</span><span>${yes(state.windivert)}</span>
     <span class="muted">xray-core</span><span>${yes(state.xray)}</span>
+    <span class="muted">Выход к VPN-серверам</span><span>${state.bind_interface ? esc(state.bind_interface) + " (в обход чужих TUN)" : "по таблице маршрутов"}</span>
     <span class="muted">Перехват</span><span>${state.capturing ? '<span class="good">работает</span>' : "выключен"}</span>
     <span class="muted">Серверов</span><span>${state.servers.length + state.relay_names.length}</span>`;
 }
 
 $("opt-save").addEventListener("click", async () => {
-  await call("set_options", { multipath: Number($("opt-multipath").value), tunnelExisting: $("opt-existing").checked, userAgent: $("opt-ua").value }, "Сохранено");
+  await call("set_options", { multipath: Number($("opt-multipath").value), tunnelExisting: $("opt-existing").checked, userAgent: $("opt-ua").value, bypassTun: $("opt-bypass").checked }, "Сохранено");
   await refreshState();
 });
 $("relays-save").addEventListener("click", async () => {
@@ -483,6 +502,11 @@ function renderAll() {
   if (page === "page-procs") renderProcsPage();
   if (page === "page-settings") renderSettings();
 }
+
+listen("auto", (e) => {
+  toast(e.payload, "ok");
+  refreshState();
+});
 
 listen("tick", (e) => {
   tick = e.payload;

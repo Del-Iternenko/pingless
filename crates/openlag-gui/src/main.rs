@@ -11,7 +11,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use openlag_capture::{Capture, CaptureConfig, Selection};
 use openlag_core::{Downstream, DownstreamFn, Engine, EngineConfig, ProxySpec, Snapshot};
-use openlag_proxy::{FetchOptions, Skipped, Xray};
+use openlag_proxy::{FetchOptions, Skipped, Xray, XrayOptions};
 use serde::Serialize;
 use settings::{ProcessGroup, Settings, Subscription};
 use tauri::{Emitter, Manager, State};
@@ -34,6 +34,13 @@ struct Net {
     capture: Option<Capture>,
     server_errors: HashMap<String, String>,
     error: Option<String>,
+    /// Adapter xray is bound to, if any.
+    bind_interface: Option<String>,
+    /// Capture was started by auto-connect (and may be stopped by it).
+    auto_started: bool,
+    /// The user switched capture off while a listed program ran; auto-connect waits
+    /// until those programs exit before acting again.
+    suppress_auto: bool,
 }
 
 type Shared<'a> = State<'a, Arc<AppState>>;
@@ -67,6 +74,7 @@ struct StateView {
     windivert: bool,
     xray: bool,
     capturing: bool,
+    bind_interface: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -119,6 +127,7 @@ impl AppState {
                 && exe_dir.join("WinDivert64.sys").exists(),
             xray: self.xray_exe.is_some(),
             capturing: net.capture.is_some(),
+            bind_interface: net.bind_interface.clone(),
         }
     }
 
@@ -154,7 +163,7 @@ impl AppState {
         for sub in s.subscriptions.iter().filter(|s| s.enabled) {
             for srv in &sub.servers {
                 let key = sub.server_key(srv);
-                if !keys.contains(&key) {
+                if !keys.contains(&key) && !s.disabled_servers.contains(&key) {
                     keys.push(key);
                     servers.push(srv.clone());
                 }
@@ -166,7 +175,15 @@ impl AppState {
                 .xray_exe
                 .as_ref()
                 .context("xray.exe is missing next to OpenLag")?;
-            let xray = Xray::start(exe, &self.work_dir.join("xray"), &servers).await?;
+            net.bind_interface = if s.bypass_tun {
+                openlag_proxy::physical_interface().map(|i| i.name)
+            } else {
+                None
+            };
+            let opts = XrayOptions {
+                bind_interface: net.bind_interface.clone(),
+            };
+            let xray = Xray::start_with(exe, &self.work_dir.join("xray"), &servers, &opts).await?;
             for (i, key) in keys.iter().enumerate() {
                 match (xray.socks[i], &xray.errors[i]) {
                     (Some(socks), _) => proxies.push(ProxySpec {
@@ -436,8 +453,38 @@ async fn set_preferred(st: Shared<'_>, key: Option<String>) -> CmdResult<()> {
 }
 
 #[tauri::command]
-async fn set_selection(st: Shared<'_>, groups: Vec<ProcessGroup>, mode: String) -> CmdResult<()> {
-    let groups = groups
+async fn set_selection(
+    st: Shared<'_>,
+    groups: Vec<ProcessGroup>,
+    exclude_groups: Vec<ProcessGroup>,
+    mode: String,
+    auto_connect: bool,
+) -> CmdResult<()> {
+    let groups = clean_groups(groups);
+    let exclude_groups = clean_groups(exclude_groups);
+    {
+        let mut s = st.settings.lock();
+        s.groups = groups;
+        s.exclude_groups = exclude_groups;
+        s.auto_connect = auto_connect;
+        s.mode = if mode == "all_except" {
+            mode
+        } else {
+            "only".into()
+        };
+    }
+    st.save().map_err(err)?;
+    // Capture reads the selection at start.
+    let mut net = st.net.lock().await;
+    if net.capture.is_some() {
+        st.stop_capture(&mut net);
+        st.start_capture(&mut net).map_err(err)?;
+    }
+    Ok(())
+}
+
+fn clean_groups(groups: Vec<ProcessGroup>) -> Vec<ProcessGroup> {
+    groups
         .into_iter()
         .map(|mut g| {
             let mut p: Vec<String> = g
@@ -454,24 +501,7 @@ async fn set_selection(st: Shared<'_>, groups: Vec<ProcessGroup>, mode: String) 
             }
             g
         })
-        .collect();
-    {
-        let mut s = st.settings.lock();
-        s.groups = groups;
-        s.mode = if mode == "all_except" {
-            mode
-        } else {
-            "only".into()
-        };
-    }
-    st.save().map_err(err)?;
-    // Capture reads the selection at start.
-    let mut net = st.net.lock().await;
-    if net.capture.is_some() {
-        st.stop_capture(&mut net);
-        st.start_capture(&mut net).map_err(err)?;
-    }
-    Ok(())
+        .collect()
 }
 
 /// `C:\Games\Foo\Foo.exe` or `Foo` -> `foo.exe`.
@@ -516,9 +546,11 @@ async fn set_options(
     multipath: usize,
     tunnel_existing: bool,
     user_agent: String,
+    bypass_tun: bool,
 ) -> CmdResult<()> {
     {
         let mut s = st.settings.lock();
+        s.bypass_tun = bypass_tun;
         s.multipath = multipath.clamp(1, 4);
         s.tunnel_existing = tunnel_existing;
         if !user_agent.trim().is_empty() {
@@ -549,12 +581,17 @@ async fn list_processes() -> CmdResult<Vec<String>> {
 #[tauri::command]
 async fn start(st: Shared<'_>) -> CmdResult<()> {
     let mut net = st.net.lock().await;
+    net.suppress_auto = false;
+    net.auto_started = false;
     st.start_capture(&mut net).map_err(err)
 }
 
 #[tauri::command]
 async fn stop(st: Shared<'_>) -> CmdResult<()> {
     let mut net = st.net.lock().await;
+    // Don't let auto-connect switch it right back on.
+    net.suppress_auto = st.settings.lock().auto_connect;
+    net.auto_started = false;
     st.stop_capture(&mut net);
     Ok(())
 }
@@ -602,6 +639,7 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 state.rebuild().await;
                 tauri::async_runtime::spawn(auto_refresh(state.clone()));
+                tauri::async_runtime::spawn(auto_connect(state.clone(), handle.clone()));
                 loop {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     // Skip a tick while a rebuild holds the lock.
@@ -684,5 +722,63 @@ async fn auto_refresh(st: Arc<AppState>) {
             st.rebuild().await;
         }
         tokio::time::sleep(Duration::from_secs(3600)).await;
+    }
+}
+
+/// Starts capture when a program from the `only` list starts, and stops it 15 s
+/// after the last one exits (only if auto-connect started it).
+async fn auto_connect(st: Arc<AppState>, handle: tauri::AppHandle) {
+    let mut last_running = std::time::Instant::now() - Duration::from_secs(3600);
+    loop {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let (enabled, wanted) = {
+            let s = st.settings.lock();
+            (s.auto_connect && !s.all_except(), s.selected_processes())
+        };
+        if !enabled || wanted.is_empty() {
+            continue;
+        }
+        let running = tauri::async_runtime::spawn_blocking(sys::process_names)
+            .await
+            .unwrap_or_default();
+        let found = wanted.iter().find(|w| running.contains(w)).cloned();
+        let Ok(mut net) = st.net.try_lock() else {
+            continue;
+        };
+        match found {
+            Some(name) => {
+                last_running = std::time::Instant::now();
+                if net.capture.is_none()
+                    && !net.suppress_auto
+                    && net.engine.is_some()
+                    && sys::is_admin()
+                {
+                    match st.start_capture(&mut net) {
+                        Ok(()) => {
+                            net.auto_started = true;
+                            let _ = handle.emit("auto", format!("Запущен {name}: туннель включён"));
+                        }
+                        Err(e) => {
+                            net.error = Some(format!("{e:#}"));
+                            net.suppress_auto = true;
+                        }
+                    }
+                }
+            }
+            None => {
+                net.suppress_auto = false;
+                if net.capture.is_some()
+                    && net.auto_started
+                    && last_running.elapsed() > Duration::from_secs(15)
+                {
+                    st.stop_capture(&mut net);
+                    net.auto_started = false;
+                    let _ = handle.emit(
+                        "auto",
+                        "Программы из списка закрыты: туннель выключен".to_string(),
+                    );
+                }
+            }
+        }
     }
 }

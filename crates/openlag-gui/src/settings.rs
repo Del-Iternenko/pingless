@@ -13,7 +13,18 @@ pub struct Settings {
     /// `only`: tunnel the processes of enabled groups; `all_except`: tunnel everything
     /// except them.
     pub mode: String,
+    /// Groups used in `only` mode.
     pub groups: Vec<ProcessGroup>,
+    /// Groups used in `all_except` mode; kept apart so switching modes never mixes
+    /// "tunnel these" with "never tunnel these".
+    pub exclude_groups: Vec<ProcessGroup>,
+    /// In `only` mode: start capture by itself when a listed program starts, stop it
+    /// when they have all exited.
+    pub auto_connect: bool,
+    /// Bind xray to the physical adapter so traffic skips other VPN clients' TUN.
+    pub bypass_tun: bool,
+    /// Server keys the user switched off: never started, never picked by "auto".
+    pub disabled_servers: Vec<String>,
     /// Pre-groups versions stored a flat list here; migrated on load.
     #[serde(skip_serializing)]
     games: Vec<String>,
@@ -34,6 +45,10 @@ impl Default for Settings {
         Settings {
             mode: "only".into(),
             groups: Vec::new(),
+            exclude_groups: Vec::new(),
+            auto_connect: false,
+            bypass_tun: true,
+            disabled_servers: Vec::new(),
             games: Vec::new(),
             multipath: 2,
             tunnel_existing: false,
@@ -62,8 +77,12 @@ pub struct ProcessGroup {
 impl Settings {
     /// Executable names of all enabled groups.
     pub fn selected_processes(&self) -> Vec<String> {
-        let mut v: Vec<String> = self
-            .groups
+        let list = if self.all_except() {
+            &self.exclude_groups
+        } else {
+            &self.groups
+        };
+        let mut v: Vec<String> = list
             .iter()
             .filter(|g| g.enabled)
             .flat_map(|g| g.processes.iter().cloned())
@@ -140,6 +159,10 @@ pub fn load(path: &Path) -> Settings {
     }
     if s.mode != "all_except" {
         s.mode = "only".into();
+    }
+    // Before separate lists existed, one list served both modes.
+    if s.all_except() && s.exclude_groups.is_empty() && !s.groups.is_empty() {
+        s.exclude_groups = std::mem::take(&mut s.groups);
     }
     s
 }

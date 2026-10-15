@@ -238,3 +238,5 @@ details ul { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; color: var(
 .group.off .chips { opacity: 0.5; }
 .proto { font-size: 11px; padding: 1px 6px; border-radius: 5px; background: var(--surface-3); color: var(--muted); }
 .proto.tcp { color: #a5b4fc; } .proto.udp { color: #6ee7b7; }
+
+[hidden] { display: none !important; }

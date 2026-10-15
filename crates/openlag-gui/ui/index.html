@@ -134,6 +134,10 @@
           <button data-mode="all_except">Всё, кроме выбранных</button>
         </div>
         <p class="hint" id="mode-hint"></p>
+        <label class="field check" id="auto-wrap" style="margin-top:12px">
+          <input type="checkbox" id="auto-connect">
+          <span>Автоподключение<small>Туннель включится сам, как только запустится программа из списка, и выключится через 15 секунд после того, как все они закроются.</small></span>
+        </label>
       </div>
       <div class="procs-grid">
         <div class="list" id="group-list"></div>
@@ -162,6 +166,10 @@
         <label class="field check">
           <input type="checkbox" id="opt-existing">
           <span>Переводить в туннель уже открытые соединения<small>Обычно выкидывает из идущего матча. Лучше включать OpenLag до запуска игры.</small></span>
+        </label>
+        <label class="field check">
+          <input type="checkbox" id="opt-bypass">
+          <span>Обходить TUN других VPN<small>Если включён Happ, v2rayN и т.п. в режиме TUN, без этого трафик идёт через два VPN подряд: пинг и джиттер растут в разы.</small></span>
         </label>
         <label class="field">
           <span>User-Agent для загрузки подписок</span>
