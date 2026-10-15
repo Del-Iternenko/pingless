@@ -9,11 +9,14 @@ use anyhow::{Context, Result};
 use openlag_proto::{Body, DataBody, MAX_DATAGRAM, PacketCipher, PingBody, SeqWindow, SessionKeys};
 use parking_lot::Mutex;
 use socket2::{Domain, Protocol, Socket, Type};
+use tokio::io::AsyncReadExt;
 use tokio::net::UdpSocket;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use crate::config::{EngineConfig, RouteSpec};
+use crate::config::{EngineConfig, ProxySpec, RouteSpec};
+use crate::socks::{self, Association};
 use crate::stats::{FlowSnapshot, PathSnapshot, PathStats, Snapshot};
 
 /// A captured UDP flow, as the game sees it.
@@ -43,6 +46,20 @@ pub struct Downstream<'a> {
 
 pub type DownstreamFn = Arc<dyn Fn(Downstream<'_>) + Send + Sync>;
 
+/// Where a flow leaves: one of our relays, or a VPN server reached through xray.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExitRef {
+    Relay(usize),
+    Proxy(usize),
+}
+
+/// Latency probes through a proxy go to this DNS server.
+const PROXY_PROBE_TARGET: SocketAddr =
+    SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 53);
+const PROXY_PROBE_INTERVAL: Duration = Duration::from_secs(1);
+/// Packets queued per proxy flow while its SOCKS association is being set up.
+const PROXY_QUEUE: usize = 512;
+
 struct ExitState {
     name: String,
     cipher: PacketCipher,
@@ -59,14 +76,23 @@ struct Path {
     stats: Mutex<PathStats>,
 }
 
+struct ProxyState {
+    id: u16,
+    spec: ProxySpec,
+    stats: Mutex<PathStats>,
+}
+
 struct Flow {
     id: u32,
     key: FlowKey,
     /// Pinned at creation: the game sees the exit's IP, so a flow never moves to
     /// another exit. None means the flow goes direct.
-    exit: Option<usize>,
+    exit: Option<ExitRef>,
     tx_seq: u64,
     rx: SeqWindow,
+    /// Queue to the flow's SOCKS association task (proxy exits only). Dropping it
+    /// ends the task and closes the association.
+    proxy_tx: Option<mpsc::Sender<(SocketAddr, Vec<u8>)>>,
     last_active: Instant,
     packets_up: u64,
     packets_down: u64,
@@ -84,11 +110,15 @@ struct Inner {
     cfg: EngineConfig,
     exits: Vec<ExitState>,
     paths: Vec<Path>,
+    proxies: Vec<ProxyState>,
+    preferred: Mutex<Option<String>>,
     flows: Mutex<Flows>,
     downstream: DownstreamFn,
     dropped_upstream: AtomicU64,
     probe_seq: AtomicU32,
     started: Instant,
+    /// Capture threads call into the engine from outside the runtime.
+    rt: tokio::runtime::Handle,
 }
 
 pub struct Engine {
@@ -101,6 +131,10 @@ impl Drop for Engine {
         for t in &self.tasks {
             t.abort();
         }
+        // Ends proxy flow tasks, which hold the inner state alive.
+        let mut flows = self.inner.flows.lock();
+        flows.by_id.clear();
+        flows.by_key.clear();
     }
 }
 
@@ -142,16 +176,29 @@ impl Engine {
                 active: Mutex::default(),
             });
         }
+        let proxies = cfg
+            .proxies
+            .iter()
+            .enumerate()
+            .map(|(i, spec)| ProxyState {
+                id: (paths.len() + i) as u16,
+                spec: spec.clone(),
+                stats: Mutex::new(PathStats::new()),
+            })
+            .collect();
 
         let inner = Arc::new(Inner {
+            preferred: Mutex::new(cfg.preferred_exit.clone()),
             cfg,
             exits,
             paths,
+            proxies,
             flows: Mutex::default(),
             downstream,
             dropped_upstream: AtomicU64::new(0),
             probe_seq: AtomicU32::new(0),
             started: Instant::now(),
+            rt: tokio::runtime::Handle::current(),
         });
 
         let mut tasks = Vec::new();
@@ -159,6 +206,12 @@ impl Engine {
             let inner = inner.clone();
             tasks.push(tokio::spawn(
                 async move { inner.recv_loop(id as u16).await },
+            ));
+        }
+        for idx in 0..inner.proxies.len() {
+            let inner = inner.clone();
+            tasks.push(tokio::spawn(
+                async move { inner.proxy_probe_loop(idx).await },
             ));
         }
         let prober = inner.clone();
@@ -176,6 +229,13 @@ impl Engine {
     pub fn any_route_alive(&self) -> bool {
         let now = Instant::now();
         self.inner.paths.iter().any(|p| p.stats.lock().alive(now))
+            || self.inner.proxies.iter().any(|p| p.stats.lock().alive(now))
+    }
+
+    /// New flows go to this exit (relay or proxy name) while it is alive.
+    /// `None` picks the exit with the best score.
+    pub fn set_preferred_exit(&self, name: Option<String>) {
+        *self.inner.preferred.lock() = name;
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -209,7 +269,14 @@ fn open_socket(route: &RouteSpec) -> Result<UdpSocket> {
 }
 
 impl Inner {
-    fn send_upstream(&self, key: FlowKey, payload: &[u8]) -> Upstream {
+    fn exit_name(&self, exit: ExitRef) -> &str {
+        match exit {
+            ExitRef::Relay(i) => &self.exits[i].name,
+            ExitRef::Proxy(i) => &self.proxies[i].spec.name,
+        }
+    }
+
+    fn send_upstream(self: &Arc<Self>, key: FlowKey, payload: &[u8]) -> Upstream {
         let mut flows = self.flows.lock();
         let id = match flows.by_key.get(&key) {
             Some(id) => *id,
@@ -219,14 +286,26 @@ impl Inner {
                 flows.next_id = flows.next_id.wrapping_add(1);
                 match exit {
                     Some(e) => info!(
-                        "flow {id} {} -> {} via exit {}",
-                        key.local, key.remote, self.exits[e].name
+                        "flow {id} {} -> {} via {}",
+                        key.local,
+                        key.remote,
+                        self.exit_name(e)
                     ),
                     None => warn!(
-                        "flow {id} {} -> {} goes direct: no relay is reachable",
+                        "flow {id} {} -> {} goes direct: no exit is reachable",
                         key.local, key.remote
                     ),
                 }
+                let proxy_tx = match exit {
+                    Some(ExitRef::Proxy(p)) => {
+                        let (tx, rx) = mpsc::channel(PROXY_QUEUE);
+                        let inner = self.clone();
+                        self.rt
+                            .spawn(async move { inner.proxy_flow(id, key, p, rx).await });
+                        Some(tx)
+                    }
+                    _ => None,
+                };
                 flows.by_key.insert(key, id);
                 flows.by_id.insert(
                     id,
@@ -236,6 +315,7 @@ impl Inner {
                         exit,
                         tx_seq: 0,
                         rx: SeqWindow::default(),
+                        proxy_tx,
                         last_active: Instant::now(),
                         packets_up: 0,
                         packets_down: 0,
@@ -248,8 +328,16 @@ impl Inner {
         let flow = flows.by_id.get_mut(&id).expect("flow index out of sync");
         flow.last_active = Instant::now();
         flow.packets_up += 1;
-        let Some(exit_idx) = flow.exit else {
-            return Upstream::Direct;
+        let exit_idx = match flow.exit {
+            None => return Upstream::Direct,
+            Some(ExitRef::Proxy(_)) => {
+                let tx = flow.proxy_tx.as_ref().expect("proxy flow without queue");
+                if tx.try_send((key.remote, payload.to_vec())).is_err() {
+                    self.dropped_upstream.fetch_add(1, Ordering::Relaxed);
+                }
+                return Upstream::Tunneled;
+            }
+            Some(ExitRef::Relay(i)) => i,
         };
         flow.tx_seq += 1;
         let seq = flow.tx_seq;
@@ -289,21 +377,34 @@ impl Inner {
         Upstream::Tunneled
     }
 
-    fn best_exit(&self) -> Option<usize> {
+    fn best_exit(&self) -> Option<ExitRef> {
         let now = Instant::now();
-        self.exits
-            .iter()
-            .enumerate()
-            .filter_map(|(i, e)| {
-                let best = e
-                    .paths
-                    .iter()
-                    .filter_map(|&p| self.paths[p as usize].stats.lock().score(now))
-                    .min_by(f64::total_cmp)?;
-                Some((i, best))
-            })
+        let mut candidates: Vec<(ExitRef, f64)> = Vec::new();
+        for (i, e) in self.exits.iter().enumerate() {
+            if let Some(best) = e
+                .paths
+                .iter()
+                .filter_map(|&p| self.paths[p as usize].stats.lock().score(now))
+                .min_by(f64::total_cmp)
+            {
+                candidates.push((ExitRef::Relay(i), best));
+            }
+        }
+        for (i, p) in self.proxies.iter().enumerate() {
+            if let Some(score) = p.stats.lock().score(now) {
+                candidates.push((ExitRef::Proxy(i), score));
+            }
+        }
+        if let Some(name) = self.preferred.lock().as_deref() {
+            if let Some((e, _)) = candidates.iter().find(|(e, _)| self.exit_name(*e) == name) {
+                return Some(*e);
+            }
+            warn!("preferred exit {name} is not reachable, using the best available one");
+        }
+        candidates
+            .into_iter()
             .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(i, _)| i)
+            .map(|(e, _)| e)
     }
 
     async fn recv_loop(self: Arc<Self>, id: u16) {
@@ -339,7 +440,7 @@ impl Inner {
                         let Some(flow) = flows.by_id.get_mut(&d.flow) else {
                             continue;
                         };
-                        if flow.exit != Some(path.exit) {
+                        if flow.exit != Some(ExitRef::Relay(path.exit)) {
                             continue;
                         }
                         if !flow.rx.accept(d.seq) {
@@ -357,6 +458,124 @@ impl Inner {
                     });
                 }
                 _ => {}
+            }
+        }
+    }
+
+    /// Carries one flow through a SOCKS5 UDP association, re-opening it if xray or
+    /// the server drops it.
+    async fn proxy_flow(
+        self: Arc<Self>,
+        flow_id: u32,
+        key: FlowKey,
+        proxy: usize,
+        mut rx: mpsc::Receiver<(SocketAddr, Vec<u8>)>,
+    ) {
+        let socks_addr = self.proxies[proxy].spec.socks;
+        let mut buf = vec![0u8; 65_536];
+        let mut out = Vec::with_capacity(2048);
+        let mut ctrl_buf = [0u8; 64];
+        loop {
+            let Association { mut ctrl, udp } = match Association::open(socks_addr).await {
+                Ok(a) => a,
+                Err(e) => {
+                    warn!("flow {flow_id}: cannot open SOCKS association: {e:#}");
+                    // Keep draining so the queue does not fill with stale packets.
+                    let retry = tokio::time::sleep(Duration::from_secs(1));
+                    tokio::pin!(retry);
+                    loop {
+                        tokio::select! {
+                            _ = &mut retry => break,
+                            m = rx.recv() => if m.is_none() { return },
+                        }
+                    }
+                    continue;
+                }
+            };
+            loop {
+                tokio::select! {
+                    m = rx.recv() => {
+                        let Some((dst, payload)) = m else { return };
+                        socks::encode(dst, &payload, &mut out);
+                        if udp.send(&out).await.is_ok() {
+                            self.proxies[proxy].stats.lock().bytes_up += out.len() as u64;
+                        }
+                    }
+                    r = udp.recv(&mut buf) => {
+                        let n = match r {
+                            Ok(n) => n,
+                            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => continue,
+                            Err(_) => break,
+                        };
+                        let Ok((from, payload)) = socks::decode(&buf[..n]) else { continue };
+                        self.proxies[proxy].stats.lock().bytes_down += n as u64;
+                        {
+                            let mut flows = self.flows.lock();
+                            let Some(flow) = flows.by_id.get_mut(&flow_id) else { return };
+                            flow.packets_down += 1;
+                            flow.last_active = Instant::now();
+                        }
+                        (self.downstream)(Downstream { key, from, payload });
+                    }
+                    r = ctrl.read(&mut ctrl_buf) => {
+                        if matches!(r, Ok(0) | Err(_)) {
+                            debug!("flow {flow_id}: SOCKS association closed, reopening");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Measures a proxy with DNS queries sent through it over UDP: exactly the path a
+    /// game's packets take, including whether the server supports UDP at all.
+    async fn proxy_probe_loop(self: Arc<Self>, idx: usize) {
+        let proxy = &self.proxies[idx];
+        let mut buf = vec![0u8; 4096];
+        let mut out = Vec::with_capacity(64);
+        let mut ctrl_buf = [0u8; 64];
+        let mut txid: u16 = rand::random();
+        loop {
+            let Association { mut ctrl, udp } = match Association::open(proxy.spec.socks).await {
+                Ok(a) => a,
+                Err(e) => {
+                    debug!("proxy {}: {e:#}", proxy.spec.name);
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    continue;
+                }
+            };
+            let mut tick = tokio::time::interval(PROXY_PROBE_INTERVAL);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    _ = tick.tick() => {
+                        txid = txid.wrapping_add(1);
+                        socks::encode(PROXY_PROBE_TARGET, &socks::dns_probe(txid), &mut out);
+                        proxy.stats.lock().on_probe_sent(txid as u32, Instant::now());
+                        if udp.send(&out).await.is_err() {
+                            break;
+                        }
+                    }
+                    r = udp.recv(&mut buf) => {
+                        let n = match r {
+                            Ok(n) => n,
+                            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => continue,
+                            Err(_) => break,
+                        };
+                        if let Ok((_, payload)) = socks::decode(&buf[..n])
+                            && payload.len() >= 2
+                        {
+                            let id = u16::from_be_bytes([payload[0], payload[1]]);
+                            proxy.stats.lock().on_pong(id as u32, Instant::now());
+                        }
+                    }
+                    r = ctrl.read(&mut ctrl_buf) => {
+                        if matches!(r, Ok(0) | Err(_)) {
+                            break;
+                        }
+                    }
+                }
             }
         }
     }
@@ -450,7 +669,8 @@ impl Inner {
                 let keep = now - f.last_active < idle;
                 if !keep {
                     by_key.remove(&f.key);
-                    if let Some(e) = f.exit {
+                    // Proxy flows end when their queue sender is dropped here.
+                    if let Some(ExitRef::Relay(e)) = f.exit {
                         closed.push((e, f.id));
                     }
                 }
@@ -473,7 +693,7 @@ impl Inner {
 
     fn snapshot(&self) -> Snapshot {
         let now = Instant::now();
-        let paths = self
+        let mut paths: Vec<PathSnapshot> = self
             .paths
             .iter()
             .map(|p| {
@@ -483,6 +703,7 @@ impl Inner {
                     id: p.id,
                     exit: self.exits[p.exit].name.clone(),
                     route: p.spec.name.clone(),
+                    kind: "relay".into(),
                     via: p.spec.via,
                     srtt_ms: srtt,
                     last_rtt_ms: last,
@@ -495,6 +716,25 @@ impl Inner {
                 }
             })
             .collect();
+        for p in &self.proxies {
+            let st = p.stats.lock();
+            let (srtt, last, jitter, loss, alive) = st.snapshot(now);
+            paths.push(PathSnapshot {
+                id: p.id,
+                exit: p.spec.name.clone(),
+                route: "proxy".into(),
+                kind: "proxy".into(),
+                via: p.spec.socks,
+                srtt_ms: srtt,
+                last_rtt_ms: last,
+                jitter_ms: jitter,
+                loss_pct: loss,
+                alive,
+                active: alive,
+                bytes_up: st.bytes_up,
+                bytes_down: st.bytes_down,
+            });
+        }
         let flows = self
             .flows
             .lock()
@@ -504,7 +744,7 @@ impl Inner {
                 id: f.id,
                 local: f.key.local,
                 remote: f.key.remote,
-                exit: f.exit.map(|e| self.exits[e].name.clone()),
+                exit: f.exit.map(|e| self.exit_name(e).to_string()),
                 packets_up: f.packets_up,
                 packets_down: f.packets_down,
                 duplicates: f.duplicates,
@@ -515,6 +755,7 @@ impl Inner {
             paths,
             flows,
             dropped_upstream: self.dropped_upstream.load(Ordering::Relaxed),
+            preferred_exit: self.preferred.lock().clone(),
         }
     }
 }

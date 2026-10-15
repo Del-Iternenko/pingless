@@ -121,6 +121,8 @@ pub struct PathSnapshot {
     pub id: u16,
     pub exit: String,
     pub route: String,
+    /// `relay` for our own relays, `proxy` for VPN servers through xray.
+    pub kind: String,
     pub via: SocketAddr,
     pub srtt_ms: Option<f64>,
     pub last_rtt_ms: Option<f64>,
@@ -150,4 +152,5 @@ pub struct Snapshot {
     pub paths: Vec<PathSnapshot>,
     pub flows: Vec<FlowSnapshot>,
     pub dropped_upstream: u64,
+    pub preferred_exit: Option<String>,
 }

@@ -110,6 +110,8 @@ fn config(routes: Vec<RouteSpec>, multipath: usize) -> EngineConfig {
             name: "test-exit".into(),
             routes,
         }],
+        proxies: vec![],
+        preferred_exit: None,
         multipath,
         probe_interval_ms: 50,
         switch_margin_ms: 5.0,

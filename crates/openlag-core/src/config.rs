@@ -5,8 +5,17 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct EngineConfig {
+    /// Pre-shared key of our own relays. Not needed when only proxies are used.
+    #[serde(default)]
     pub psk: String,
+    #[serde(default)]
     pub exits: Vec<ExitSpec>,
+    /// VPN servers reachable through local SOCKS5 ports (xray).
+    #[serde(default)]
+    pub proxies: Vec<ProxySpec>,
+    /// Exit (relay or proxy name) to use while it is alive.
+    #[serde(default)]
+    pub preferred_exit: Option<String>,
     /// How many routes to the chosen exit carry each packet at the same time.
     /// 1 disables multipath.
     #[serde(default = "default_multipath")]
@@ -28,6 +37,14 @@ pub struct EngineConfig {
 pub struct ExitSpec {
     pub name: String,
     pub routes: Vec<RouteSpec>,
+}
+
+/// A VPN server exposed by xray as a local SOCKS5 proxy with UDP support.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProxySpec {
+    pub name: String,
+    pub socks: SocketAddr,
 }
 
 /// One way to reach an exit: directly, or through a bridge, optionally pinned to a
@@ -62,11 +79,20 @@ impl EngineConfig {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
-        anyhow::ensure!(!self.psk.is_empty(), "psk must not be empty");
-        anyhow::ensure!(!self.exits.is_empty(), "at least one exit is required");
+        anyhow::ensure!(
+            !self.exits.is_empty() || !self.proxies.is_empty(),
+            "add at least one relay or VPN server"
+        );
+        anyhow::ensure!(
+            self.exits.is_empty() || !self.psk.is_empty(),
+            "psk must not be empty when relays are used"
+        );
         anyhow::ensure!(self.multipath >= 1, "multipath must be at least 1");
-        let routes: usize = self.exits.iter().map(|e| e.routes.len()).sum();
-        anyhow::ensure!(routes > 0, "at least one route is required");
+        for e in &self.exits {
+            anyhow::ensure!(!e.routes.is_empty(), "relay {} has no routes", e.name);
+        }
+        let routes: usize =
+            self.exits.iter().map(|e| e.routes.len()).sum::<usize>() + self.proxies.len();
         anyhow::ensure!(routes < u16::MAX as usize, "too many routes");
         Ok(())
     }

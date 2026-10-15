@@ -7,8 +7,9 @@
 
 mod config;
 mod engine;
+mod socks;
 mod stats;
 
-pub use config::{EngineConfig, ExitSpec, RouteSpec};
+pub use config::{EngineConfig, ExitSpec, ProxySpec, RouteSpec};
 pub use engine::{Downstream, DownstreamFn, Engine, FlowKey, Upstream};
 pub use stats::{FlowSnapshot, PathSnapshot, Snapshot};

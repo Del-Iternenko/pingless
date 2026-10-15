@@ -1,0 +1,23 @@
+[package]
+name = "openlag-proxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+rand.workspace = true
+base64 = "0.23.1"
+flate2 = "1.1.10"
+percent-encoding = "2.3.2"
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "gzip", "http2"] }
+serde.workspace = true
+serde_json = "1.0.154"
+tokio = { workspace = true, features = ["process", "io-util"] }
+tracing.workspace = true
+
+[dev-dependencies]
+openlag-core.workspace = true
+parking_lot.workspace = true
+tokio = { workspace = true, features = ["process", "io-util", "rt-multi-thread", "macros"] }

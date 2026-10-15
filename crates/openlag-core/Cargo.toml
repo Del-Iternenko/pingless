@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 openlag-proto.workspace = true
 anyhow.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
 tracing.workspace = true
 serde.workspace = true
 parking_lot.workspace = true
