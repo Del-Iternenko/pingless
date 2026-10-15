@@ -1,6 +1,6 @@
 //! Minimal IPv4/IPv6 + UDP parsing and building for captured and injected packets.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
 
 const UDP: u8 = 17;
 
@@ -142,6 +142,62 @@ fn fold(mut acc: u32) -> u16 {
     !(acc as u16)
 }
 
+const TCP: u8 = 6;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TcpInfo {
+    pub src: SocketAddrV4,
+    pub dst: SocketAddrV4,
+    pub syn: bool,
+    pub ack: bool,
+}
+
+/// Parses an IPv4 TCP packet header. IPv6 TCP is not redirected yet.
+pub fn parse_tcp_v4(pkt: &[u8]) -> Option<TcpInfo> {
+    if pkt.len() < 20 || pkt[0] >> 4 != 4 || pkt[9] != TCP {
+        return None;
+    }
+    let ihl = (pkt[0] & 0x0f) as usize * 4;
+    let frag = u16::from_be_bytes([pkt[6], pkt[7]]);
+    if ihl < 20 || pkt.len() < ihl + 20 || frag & 0x1fff != 0 {
+        return None;
+    }
+    let t = &pkt[ihl..];
+    Some(TcpInfo {
+        src: SocketAddrV4::new(
+            Ipv4Addr::new(pkt[12], pkt[13], pkt[14], pkt[15]),
+            u16::from_be_bytes([t[0], t[1]]),
+        ),
+        dst: SocketAddrV4::new(
+            Ipv4Addr::new(pkt[16], pkt[17], pkt[18], pkt[19]),
+            u16::from_be_bytes([t[2], t[3]]),
+        ),
+        syn: t[13] & 0x02 != 0,
+        ack: t[13] & 0x10 != 0,
+    })
+}
+
+/// Rewrites addresses and ports of an IPv4 TCP packet in place and recomputes the
+/// IP and TCP checksums.
+pub fn rewrite_tcp_v4(pkt: &mut [u8], src: SocketAddrV4, dst: SocketAddrV4) -> Option<()> {
+    parse_tcp_v4(pkt)?;
+    let ihl = (pkt[0] & 0x0f) as usize * 4;
+    let total = (u16::from_be_bytes([pkt[2], pkt[3]]) as usize).min(pkt.len());
+    pkt[12..16].copy_from_slice(&src.ip().octets());
+    pkt[16..20].copy_from_slice(&dst.ip().octets());
+    pkt[ihl..ihl + 2].copy_from_slice(&src.port().to_be_bytes());
+    pkt[ihl + 2..ihl + 4].copy_from_slice(&dst.port().to_be_bytes());
+    pkt[10..12].copy_from_slice(&[0, 0]);
+    let ip_sum = fold(sum(&pkt[..ihl], 0));
+    pkt[10..12].copy_from_slice(&ip_sum.to_be_bytes());
+    pkt[ihl + 16..ihl + 18].copy_from_slice(&[0, 0]);
+    let seg_len = total - ihl;
+    let pseudo = sum(&dst.ip().octets(), sum(&src.ip().octets(), 0)) + TCP as u32 + seg_len as u32;
+    let tcp_sum = fold(sum(&pkt[ihl..total], pseudo));
+    pkt[ihl + 16..ihl + 18].copy_from_slice(&tcp_sum.to_be_bytes());
+    Some(())
+}
+
 /// True for addresses that should never be tunnelled: LAN, loopback, multicast, etc.
 pub fn is_local_scope(ip: IpAddr) -> bool {
     match ip {
@@ -224,6 +280,39 @@ mod tests {
         );
         assert!(parse_udp(&[0x45, 0, 0]).is_none());
         assert!(parse_udp(&[]).is_none());
+    }
+
+    #[test]
+    fn tcp_rewrite_keeps_checksums_valid() {
+        // SYN with options (24-byte TCP header) and a 3-byte payload.
+        let mut pkt = vec![
+            0x45, 0, 0, 0, 0x12, 0x34, 0x40, 0, 64, TCP, 0, 0, 10, 0, 0, 2, 93, 184, 216, 34,
+        ];
+        let tcp = [
+            0xc3, 0x50, 0x01, 0xbb, 0, 0, 0, 1, 0, 0, 0, 0, 0x60, 0x02, 0xff, 0xff, 0, 0, 0, 0, 2,
+            4, 5, 0xb4,
+        ];
+        pkt.extend_from_slice(&tcp);
+        pkt.extend_from_slice(b"abc");
+        let len = pkt.len() as u16;
+        pkt[2..4].copy_from_slice(&len.to_be_bytes());
+
+        let info = parse_tcp_v4(&pkt).unwrap();
+        assert_eq!(info.src, "10.0.0.2:50000".parse().unwrap());
+        assert_eq!(info.dst, "93.184.216.34:443".parse().unwrap());
+        assert!(info.syn && !info.ack);
+
+        let (s, d) = (
+            "93.184.216.34:50000".parse().unwrap(),
+            "10.0.0.2:41000".parse().unwrap(),
+        );
+        rewrite_tcp_v4(&mut pkt, s, d).unwrap();
+        let info = parse_tcp_v4(&pkt).unwrap();
+        assert_eq!((info.src, info.dst), (s, d));
+        assert_eq!(fold(sum(&pkt[..20], 0)), 0, "IP checksum");
+        let pseudo = sum(&pkt[16..20], sum(&pkt[12..16], 0)) + TCP as u32 + (pkt.len() - 20) as u32;
+        assert_eq!(fold(sum(&pkt[20..], pseudo)), 0, "TCP checksum");
+        assert_eq!(&pkt[pkt.len() - 3..], b"abc");
     }
 
     #[test]

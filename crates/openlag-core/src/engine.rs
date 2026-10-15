@@ -18,6 +18,7 @@ use tracing::{debug, info, warn};
 use crate::config::{EngineConfig, ProxySpec, RouteSpec};
 use crate::socks::{self, Association};
 use crate::stats::{FlowSnapshot, PathSnapshot, PathStats, Snapshot};
+use crate::tcp;
 
 /// A captured UDP flow, as the game sees it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -119,6 +120,9 @@ struct Inner {
     started: Instant,
     /// Capture threads call into the engine from outside the runtime.
     rt: tokio::runtime::Handle,
+    tcp_table: Arc<tcp::Table>,
+    /// Local port of the TCP redirect listener; None without proxy exits.
+    tcp_port: Option<u16>,
 }
 
 pub struct Engine {
@@ -187,7 +191,19 @@ impl Engine {
             })
             .collect();
 
+        // TCP can only go through proxies: our relays carry UDP only.
+        let tcp_listener = if cfg.proxies.is_empty() {
+            None
+        } else {
+            Some(tcp::bind().await?)
+        };
+        let tcp_port = match &tcp_listener {
+            Some(l) => Some(l.local_addr()?.port()),
+            None => None,
+        };
         let inner = Arc::new(Inner {
+            tcp_table: Arc::default(),
+            tcp_port,
             preferred: Mutex::new(cfg.preferred_exit.clone()),
             cfg,
             exits,
@@ -213,6 +229,12 @@ impl Engine {
             tasks.push(tokio::spawn(
                 async move { inner.proxy_probe_loop(idx).await },
             ));
+        }
+        if let Some(listener) = tcp_listener {
+            tasks.push(tokio::spawn(tcp::accept_loop(
+                listener,
+                inner.tcp_table.clone(),
+            )));
         }
         let prober = inner.clone();
         tasks.push(tokio::spawn(async move { prober.probe_loop().await }));
@@ -240,6 +262,34 @@ impl Engine {
 
     pub fn snapshot(&self) -> Snapshot {
         self.inner.snapshot()
+    }
+
+    /// Port of the local TCP redirect listener, if TCP can be tunnelled at all.
+    pub fn tcp_listen_port(&self) -> Option<u16> {
+        self.inner.tcp_port
+    }
+
+    /// Registers a new TCP connection from `client` to `orig` for redirection and
+    /// returns true, or false if it should go direct (no reachable proxy exit).
+    pub fn tcp_open(&self, client: SocketAddr, orig: SocketAddr) -> bool {
+        let inner = &self.inner;
+        if inner.tcp_port.is_none() || !orig.is_ipv4() {
+            return false;
+        }
+        let Some(idx) = inner.best_proxy() else {
+            return false;
+        };
+        let p = &inner.proxies[idx];
+        debug!("tcp {client} -> {orig} via {}", p.spec.name);
+        inner
+            .tcp_table
+            .insert(client, orig, p.spec.socks, p.spec.name.clone());
+        true
+    }
+
+    /// Where the redirected connection from local port `client_port` was going.
+    pub fn tcp_original(&self, client_port: u16) -> Option<SocketAddr> {
+        self.inner.tcp_table.original(client_port)
     }
 }
 
@@ -405,6 +455,23 @@ impl Inner {
             .into_iter()
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(e, _)| e)
+    }
+
+    /// Best alive proxy exit, honouring the preferred exit when it is a proxy.
+    fn best_proxy(&self) -> Option<usize> {
+        let now = Instant::now();
+        if let Some(name) = self.preferred.lock().as_deref()
+            && let Some(i) = self.proxies.iter().position(|p| p.spec.name == name)
+            && self.proxies[i].stats.lock().alive(now)
+        {
+            return Some(i);
+        }
+        self.proxies
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| Some((i, p.stats.lock().score(now)?)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
     }
 
     async fn recv_loop(self: Arc<Self>, id: u16) {
@@ -609,6 +676,7 @@ impl Inner {
             if now - last_sweep >= Duration::from_secs(1) {
                 last_sweep = now;
                 self.sweep_flows(now);
+                self.tcp_table.sweep();
             }
         }
     }
@@ -756,6 +824,7 @@ impl Inner {
             flows,
             dropped_upstream: self.dropped_upstream.load(Ordering::Relaxed),
             preferred_exit: self.preferred.lock().clone(),
+            tcp: self.tcp_table.snapshot(),
         }
     }
 }

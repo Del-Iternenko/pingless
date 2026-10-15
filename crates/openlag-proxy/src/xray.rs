@@ -93,9 +93,11 @@ pub fn build_config(servers: &[(ProxyServer, u16)]) -> Value {
     })
 }
 
-/// A running xray process. Killed when dropped.
+/// A running xray process. Killed when dropped, and by Windows if we crash.
 pub struct Xray {
     child: Child,
+    #[cfg(windows)]
+    _job: Option<job::Job>,
     /// SOCKS5 address for each server that passed validation, same order as input.
     pub socks: Vec<Option<SocketAddr>>,
     /// Why a server was left out.
@@ -162,6 +164,8 @@ impl Xray {
             .kill_on_drop(true)
             .spawn()
             .context("cannot start xray")?;
+        #[cfg(windows)]
+        let job = job::Job::kill_on_close(&child);
         let last_line = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
         for stream in [
             child
@@ -198,6 +202,8 @@ impl Xray {
                 info!("xray started with {} server(s)", chosen.len());
                 return Ok(Xray {
                     child,
+                    #[cfg(windows)]
+                    _job: job,
                     socks,
                     errors,
                 });
@@ -205,6 +211,11 @@ impl Xray {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         bail!("xray did not open its SOCKS ports in 5 s")
+    }
+
+    /// Process id, so capture can keep xray's own traffic out of the tunnel.
+    pub fn pid(&self) -> Option<u32> {
+        self.child.id()
     }
 
     pub fn is_running(&mut self) -> bool {
@@ -262,4 +273,56 @@ fn free_port() -> Result<u16> {
         }
     }
     bail!("no local port is free for both TCP and UDP")
+}
+
+#[cfg(windows)]
+mod job {
+    use tokio::process::Child;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject,
+    };
+
+    /// Job object that kills its processes when the last handle closes, which also
+    /// happens when our process dies. Without it a crash would leave xray running.
+    pub(super) struct Job(HANDLE);
+
+    unsafe impl Send for Job {}
+    unsafe impl Sync for Job {}
+
+    impl Job {
+        pub(super) fn kill_on_close(child: &Child) -> Option<Job> {
+            let process = child.raw_handle()? as HANDLE;
+            // SAFETY: plain Win32 calls with valid handles and a zeroed info struct.
+            unsafe {
+                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if job.is_null() {
+                    return None;
+                }
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let ok = SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    (&info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                ) != 0
+                    && AssignProcessToJobObject(job, process) != 0;
+                if !ok {
+                    CloseHandle(job);
+                    return None;
+                }
+                Some(Job(job))
+            }
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            // SAFETY: closed once.
+            unsafe { CloseHandle(self.0) };
+        }
+    }
 }

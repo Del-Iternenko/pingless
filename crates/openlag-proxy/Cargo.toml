@@ -21,3 +21,6 @@ tracing.workspace = true
 openlag-core.workspace = true
 parking_lot.workspace = true
 tokio = { workspace = true, features = ["process", "io-util", "rt-multi-thread", "macros"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }

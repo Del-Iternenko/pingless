@@ -62,6 +62,45 @@ impl Association {
     }
 }
 
+/// Opens a TCP connection to `dst` through the SOCKS5 server.
+pub(crate) async fn connect(socks: SocketAddr, dst: SocketAddr) -> Result<TcpStream> {
+    let mut s = TcpStream::connect(socks).await?;
+    s.set_nodelay(true)?;
+    s.write_all(&[5, 1, 0]).await?;
+    let mut hello = [0u8; 2];
+    s.read_exact(&mut hello).await?;
+    if hello != [5, 0] {
+        bail!("SOCKS server refused no-auth login");
+    }
+    let mut req = vec![5, 1, 0];
+    match dst.ip() {
+        IpAddr::V4(ip) => {
+            req.push(1);
+            req.extend_from_slice(&ip.octets());
+        }
+        IpAddr::V6(ip) => {
+            req.push(4);
+            req.extend_from_slice(&ip.octets());
+        }
+    }
+    req.extend_from_slice(&dst.port().to_be_bytes());
+    s.write_all(&req).await?;
+    let mut head = [0u8; 4];
+    s.read_exact(&mut head).await?;
+    if head[1] != 0 {
+        bail!("SOCKS CONNECT to {dst} failed with code {}", head[1]);
+    }
+    let skip = match head[3] {
+        1 => 4,
+        4 => 16,
+        3 => s.read_u8().await? as usize,
+        t => bail!("bad SOCKS address type {t}"),
+    };
+    let mut rest = vec![0u8; skip + 2];
+    s.read_exact(&mut rest).await?;
+    Ok(s)
+}
+
 /// `RSV RSV FRAG ATYP ADDR PORT DATA`
 pub(crate) fn encode(dst: SocketAddr, payload: &[u8], out: &mut Vec<u8>) {
     out.clear();

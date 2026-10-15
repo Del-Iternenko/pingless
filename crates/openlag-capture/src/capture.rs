@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
+use std::net::{SocketAddr, SocketAddrV4};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
@@ -9,17 +9,30 @@ use openlag_core::{Downstream, Engine, FlowKey, Upstream};
 use parking_lot::Mutex;
 use tracing::{debug, info, warn};
 
-use crate::packet::{build_udp, is_local_scope, parse_udp};
-use crate::procmap::{ProcessMap, udp_table};
+use crate::packet::{build_udp, is_local_scope, parse_tcp_v4, parse_udp, rewrite_tcp_v4};
+use crate::procmap::{ProcessMap, TCP, UDP, port_table};
 use crate::windivert::{self as wd, Address, Handle};
 
-#[derive(Debug, Clone)]
+/// Which processes go through the tunnel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Selection {
+    /// Only the listed processes.
+    #[default]
+    Only,
+    /// Everything except the listed processes.
+    AllExcept,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct CaptureConfig {
-    /// Executable names whose UDP traffic is tunnelled, e.g. `cs2.exe`.
+    /// Executable names, e.g. `cs2.exe` (case-insensitive).
     pub processes: Vec<String>,
+    pub mode: Selection,
     /// Also tunnel UDP sockets that were open before capture started. Off by default:
     /// moving a live match to another IP usually disconnects it.
     pub tunnel_existing: bool,
+    /// Never tunnel these processes (our own xray, which carries the tunnel itself).
+    pub exclude_pids: Vec<u32>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -28,14 +41,17 @@ pub struct CaptureStats {
     pub direct: u64,
     pub injected: u64,
     pub inject_errors: u64,
+    pub tcp_redirected: u64,
 }
 
 struct Shared {
-    targets: HashSet<String>,
+    names: HashSet<String>,
+    mode: Selection,
+    exclude_pids: HashSet<u32>,
     procs: ProcessMap,
-    /// Interface a flow was seen on, needed to inject answers.
+    /// Interface a UDP flow was seen on, needed to inject answers.
     flow_if: Mutex<HashMap<FlowKey, (u32, u32)>>,
-    /// Ports of target sockets that existed at start and stay direct.
+    /// UDP ports of selected sockets that existed at start and stay direct.
     preexisting: Mutex<HashSet<u16>>,
     net: Arc<Handle>,
     stopping: AtomicBool,
@@ -43,9 +59,10 @@ struct Shared {
     direct: AtomicU64,
     injected: AtomicU64,
     inject_errors: AtomicU64,
+    tcp_redirected: AtomicU64,
 }
 
-/// Captures outbound UDP of the configured processes and injects answers back.
+/// Captures outbound traffic of the selected processes and injects answers back.
 pub struct Capture {
     shared: Arc<Shared>,
     sock: Arc<Handle>,
@@ -55,16 +72,29 @@ pub struct Capture {
 impl Capture {
     /// Opens the WinDivert handles. Requires Administrator rights and the driver files.
     pub fn open(cfg: &CaptureConfig) -> Result<Capture> {
-        let net = Handle::open("outbound and udp and !loopback", wd::LAYER_NETWORK, 0, 0)?;
+        let net = Handle::open(
+            "outbound and !loopback and (udp or tcp)",
+            wd::LAYER_NETWORK,
+            0,
+            0,
+        )?;
         let sock = Handle::open(
-            "udp",
+            "udp or tcp",
             wd::LAYER_SOCKET,
             0,
             wd::FLAG_SNIFF | wd::FLAG_RECV_ONLY,
         )?;
-        let targets: HashSet<String> = cfg.processes.iter().map(|p| p.to_lowercase()).collect();
+        let mut exclude_pids: HashSet<u32> = cfg.exclude_pids.iter().copied().collect();
+        exclude_pids.insert(std::process::id());
         let shared = Arc::new(Shared {
-            targets,
+            names: cfg
+                .processes
+                .iter()
+                .map(|p| p.trim().to_lowercase())
+                .filter(|p| !p.is_empty())
+                .collect(),
+            mode: cfg.mode,
+            exclude_pids,
             procs: ProcessMap::default(),
             flow_if: Mutex::default(),
             preexisting: Mutex::default(),
@@ -74,23 +104,23 @@ impl Capture {
             direct: AtomicU64::new(0),
             injected: AtomicU64::new(0),
             inject_errors: AtomicU64::new(0),
+            tcp_redirected: AtomicU64::new(0),
         });
 
+        for (port, pid) in port_table(TCP) {
+            shared.procs.on_bind(TCP, port, pid);
+        }
         let mut existing = Vec::new();
-        for (port, pid) in udp_table() {
-            shared.procs.on_bind(port, pid);
-            if shared
-                .procs
-                .name(pid)
-                .is_some_and(|n| shared.targets.contains(&n))
-            {
+        for (port, pid) in port_table(UDP) {
+            shared.procs.on_bind(UDP, port, pid);
+            if shared.selected(pid).is_some() {
                 existing.push(port);
             }
         }
         if !existing.is_empty() && !cfg.tunnel_existing {
-            warn!(
-                "{} UDP socket(s) of target processes were already open and will stay direct; \
-                 restart the game (or the match) to tunnel it",
+            info!(
+                "{} UDP socket(s) of selected processes were already open and stay direct \
+                 until the program reopens them",
                 existing.len()
             );
             shared.preexisting.lock().extend(existing);
@@ -102,7 +132,7 @@ impl Capture {
         })
     }
 
-    /// Callback for [`Engine::start`]: injects packets from relays into the game.
+    /// Callback for [`Engine::start`]: injects packets from relays into the program.
     pub fn downstream(&self) -> openlag_core::DownstreamFn {
         let shared = self.shared.clone();
         Arc::new(move |d: Downstream<'_>| shared.inject(d))
@@ -125,7 +155,10 @@ impl Capture {
                 .spawn(move || shared.socket_loop(&sock))
                 .expect("spawn socket thread"),
         );
-        info!("capturing UDP of {:?}", self.shared.targets);
+        match self.shared.mode {
+            Selection::Only => info!("capturing {:?}", self.shared.names),
+            Selection::AllExcept => info!("capturing everything except {:?}", self.shared.names),
+        }
     }
 
     pub fn stats(&self) -> CaptureStats {
@@ -135,6 +168,7 @@ impl Capture {
             direct: s.direct.load(Ordering::Relaxed),
             injected: s.injected.load(Ordering::Relaxed),
             inject_errors: s.inject_errors.load(Ordering::Relaxed),
+            tcp_redirected: s.tcp_redirected.load(Ordering::Relaxed),
         }
     }
 
@@ -156,6 +190,20 @@ impl Drop for Capture {
 }
 
 impl Shared {
+    /// The process name if this process should go through the tunnel.
+    fn selected(&self, pid: u32) -> Option<String> {
+        if self.exclude_pids.contains(&pid) {
+            return None;
+        }
+        // Unknown name (protected or exited process): leave it alone in both modes.
+        let name = self.procs.name(pid)?;
+        let listed = self.names.contains(&name);
+        match self.mode {
+            Selection::Only => listed.then_some(name),
+            Selection::AllExcept => (!listed).then_some(name),
+        }
+    }
+
     fn network_loop(&self, engine: &Engine) {
         let mut buf = vec![0u8; 65_535 + 1024];
         let mut addr = Address::default();
@@ -169,11 +217,21 @@ impl Shared {
                     return;
                 }
             };
-            let pkt = &buf[..len];
-            if self.try_tunnel(engine, pkt, &addr) {
+            let pkt = &mut buf[..len];
+            let proto = match pkt.first().map(|b| b >> 4) {
+                Some(4) if pkt.len() >= 20 => pkt[9],
+                Some(6) if pkt.len() >= 40 => pkt[6],
+                _ => 0,
+            };
+            let handled = match proto {
+                UDP => self.try_udp(engine, pkt, &addr),
+                TCP => self.try_tcp(engine, pkt, &addr),
+                _ => false,
+            };
+            if handled {
                 continue;
             }
-            // Not ours, or no relay: let the original packet go.
+            // Not ours, or no exit: let the original packet go.
             if let Err(e) = self.net.send(pkt, &addr) {
                 debug!("reinject failed: {e:#}");
             }
@@ -181,7 +239,7 @@ impl Shared {
     }
 
     /// Returns true if the engine took the packet and the original must be dropped.
-    fn try_tunnel(&self, engine: &Engine, pkt: &[u8], addr: &Address) -> bool {
+    fn try_udp(&self, engine: &Engine, pkt: &[u8], addr: &Address) -> bool {
         if !addr.outbound() || addr.loopback() {
             return false;
         }
@@ -192,18 +250,12 @@ impl Shared {
             return false;
         }
         let port = udp.src.port();
-        let Some(pid) = self.procs.pid_for_port(port) else {
+        let Some(pid) = self.procs.pid_for_port(UDP, port) else {
             return false;
         };
-        if pid == std::process::id() {
-            return false;
-        }
-        let Some(name) = self.procs.name(pid) else {
+        let Some(name) = self.selected(pid) else {
             return false;
         };
-        if !self.targets.contains(&name) {
-            return false;
-        }
         if self.preexisting.lock().contains(&port) {
             self.direct.fetch_add(1, Ordering::Relaxed);
             return false;
@@ -218,7 +270,7 @@ impl Shared {
                 .insert(key, (addr.if_idx(), addr.sub_if_idx()))
                 .is_none()
             {
-                info!("{name} (pid {pid}) {} -> {}", udp.src, udp.dst);
+                info!("{name} (pid {pid}) udp {} -> {}", udp.src, udp.dst);
             }
         }
         match engine.send_upstream(key, udp.payload) {
@@ -233,11 +285,78 @@ impl Shared {
         }
     }
 
+    /// Redirects TCP of selected processes to the engine's local listener, and turns
+    /// the listener's answers back into packets from the real server. Returns true if
+    /// the packet was rewritten and injected.
+    fn try_tcp(&self, engine: &Engine, pkt: &mut [u8], addr: &Address) -> bool {
+        let Some(listen) = engine.tcp_listen_port() else {
+            return false;
+        };
+        if !addr.outbound() || addr.loopback() {
+            return false;
+        }
+        let Some(t) = parse_tcp_v4(pkt) else {
+            return false;
+        };
+
+        // Listener -> app: (client_ip:listen) -> (server_ip:client_port) becomes
+        // (server_ip:orig_port) -> (client_ip:client_port).
+        if t.src.port() == listen {
+            let Some(orig) = engine.tcp_original(t.dst.port()) else {
+                return false;
+            };
+            let from = SocketAddrV4::new(*t.dst.ip(), orig.port());
+            let to = SocketAddrV4::new(*t.src.ip(), t.dst.port());
+            return self.inject_tcp(pkt, addr, from, to);
+        }
+
+        // App -> server: (client_ip:client_port) -> (server_ip:orig_port) becomes
+        // (server_ip:client_port) -> (client_ip:listen).
+        let known = engine.tcp_original(t.src.port()) == Some(SocketAddr::V4(t.dst));
+        let redirect = known
+            || (t.syn
+                && !t.ack
+                && !is_local_scope((*t.dst.ip()).into())
+                && self
+                    .procs
+                    .pid_for_port(TCP, t.src.port())
+                    .and_then(|pid| self.selected(pid))
+                    .is_some()
+                && engine.tcp_open(SocketAddr::V4(t.src), SocketAddr::V4(t.dst)));
+        if !redirect {
+            return false;
+        }
+        if !known {
+            self.tcp_redirected.fetch_add(1, Ordering::Relaxed);
+        }
+        let from = SocketAddrV4::new(*t.dst.ip(), t.src.port());
+        let to = SocketAddrV4::new(*t.src.ip(), listen);
+        self.inject_tcp(pkt, addr, from, to)
+    }
+
+    fn inject_tcp(
+        &self,
+        pkt: &mut [u8],
+        addr: &Address,
+        from: SocketAddrV4,
+        to: SocketAddrV4,
+    ) -> bool {
+        if rewrite_tcp_v4(pkt, from, to).is_none() {
+            return false;
+        }
+        if let Err(e) = self.net.send(pkt, &addr.turned_inbound_tcp())
+            && self.inject_errors.fetch_add(1, Ordering::Relaxed) == 0
+        {
+            warn!("tcp inject failed: {e:#}");
+        }
+        true
+    }
+
     fn inject(&self, d: Downstream<'_>) {
         let Some((if_idx, sub_if_idx)) = self.flow_if.lock().get(&d.key).copied() else {
             return;
         };
-        // Answer must come "from" a peer of the same family as the game's socket.
+        // Answer must come "from" a peer of the same family as the program's socket.
         let from: SocketAddr = match (d.from, d.key.local) {
             (SocketAddr::V4(_), SocketAddr::V4(_)) | (SocketAddr::V6(_), SocketAddr::V6(_)) => {
                 d.from
@@ -274,15 +393,18 @@ impl Shared {
                 }
                 return;
             }
-            if addr.protocol() != 17 {
+            let proto = addr.protocol();
+            if proto != UDP && proto != TCP {
                 continue;
             }
             let (port, pid) = (addr.local_port(), addr.process_id());
             match addr.event() {
-                wd::EVENT_SOCKET_BIND | wd::EVENT_SOCKET_CONNECT => self.procs.on_bind(port, pid),
+                wd::EVENT_SOCKET_BIND | wd::EVENT_SOCKET_CONNECT => {
+                    self.procs.on_bind(proto, port, pid)
+                }
                 wd::EVENT_SOCKET_CLOSE => {
-                    self.procs.on_close(port, pid);
-                    if self.preexisting.lock().remove(&port) {
+                    self.procs.on_close(proto, port, pid);
+                    if proto == UDP && self.preexisting.lock().remove(&port) {
                         debug!("pre-existing socket :{port} closed; new sockets will be tunnelled");
                     }
                 }

@@ -6,7 +6,8 @@
 //! the original server address, Windows Firewall sees them as replies on the game's
 //! existing flow and lets them in.
 //!
-//! TCP is not captured yet: game TCP connections go direct.
+//! TCP connections are redirected to the engine's local listener by rewriting packets
+//! and go out through proxy exits; with only relays configured, TCP goes direct.
 
 mod packet;
 
@@ -17,7 +18,7 @@ mod procmap;
 #[cfg(windows)]
 mod windivert;
 
-pub use packet::{build_udp, is_local_scope, parse_udp};
+pub use packet::{TcpInfo, build_udp, is_local_scope, parse_tcp_v4, parse_udp, rewrite_tcp_v4};
 
 #[cfg(windows)]
-pub use capture::{Capture, CaptureConfig, CaptureStats};
+pub use capture::{Capture, CaptureConfig, CaptureStats, Selection};

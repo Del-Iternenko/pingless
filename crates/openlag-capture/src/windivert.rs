@@ -106,6 +106,16 @@ impl Address {
         b[4..8].copy_from_slice(&sub_if_idx.to_ne_bytes());
         a
     }
+
+    /// The same packet address turned around: inject a rewritten outbound IPv4 TCP
+    /// packet as inbound on the interface it was seen on.
+    pub fn turned_inbound_tcp(&self) -> Address {
+        let mut a = *self;
+        a.set_bit(17, false);
+        a.set_bit(21, true); // IP checksum valid
+        a.set_bit(22, true); // TCP checksum valid
+        a
+    }
 }
 
 type OpenFn = unsafe extern "C" fn(*const i8, u32, i16, u64) -> HANDLE;

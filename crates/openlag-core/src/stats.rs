@@ -153,4 +153,6 @@ pub struct Snapshot {
     pub flows: Vec<FlowSnapshot>,
     pub dropped_upstream: u64,
     pub preferred_exit: Option<String>,
+    /// TCP connections redirected through proxies (largest first, up to 200).
+    pub tcp: Vec<crate::tcp::TcpSnapshot>,
 }

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenLag",
+  "version": "0.1.0",
+  "identifier": "dev.openlag.app",
+  "build": {
+    "frontendDist": "ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "OpenLag",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 960,
+        "minHeight": 620,
+        "backgroundColor": "#0B0F17"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
+    "resources": {
+      "../../vendor/xray/xray.exe": "xray.exe",
+      "../../vendor/xray/LICENSE": "licenses/xray-LICENSE.txt",
+      "../../vendor/WinDivert-2.2.2-A/x64/WinDivert.dll": "WinDivert.dll",
+      "../../vendor/WinDivert-2.2.2-A/x64/WinDivert64.sys": "WinDivert64.sys",
+      "../../vendor/WinDivert-2.2.2-A/LICENSE": "licenses/WinDivert-LICENSE.txt"
+    }
+  }
+}

@@ -1,0 +1,688 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod settings;
+mod sys;
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use openlag_capture::{Capture, CaptureConfig, Selection};
+use openlag_core::{Downstream, DownstreamFn, Engine, EngineConfig, ProxySpec, Snapshot};
+use openlag_proxy::{FetchOptions, Skipped, Xray};
+use serde::Serialize;
+use settings::{ProcessGroup, Settings, Subscription};
+use tauri::{Emitter, Manager, State};
+use tracing::{info, warn};
+
+struct AppState {
+    settings: parking_lot::Mutex<Settings>,
+    settings_path: PathBuf,
+    work_dir: PathBuf,
+    xray_exe: Option<PathBuf>,
+    net: tokio::sync::Mutex<Net>,
+    /// Where the engine delivers answers; set while capture runs.
+    sink: Arc<parking_lot::RwLock<Option<DownstreamFn>>>,
+}
+
+#[derive(Default)]
+struct Net {
+    xray: Option<Xray>,
+    engine: Option<Arc<Engine>>,
+    capture: Option<Capture>,
+    server_errors: HashMap<String, String>,
+    error: Option<String>,
+}
+
+type Shared<'a> = State<'a, Arc<AppState>>;
+type CmdResult<T> = Result<T, String>;
+
+fn err(e: anyhow::Error) -> String {
+    format!("{e:#}")
+}
+
+// ---------------------------------------------------------------------------
+// State sent to the UI
+
+#[derive(Serialize)]
+struct ServerView {
+    key: String,
+    name: String,
+    subscription: String,
+    protocol: String,
+    address: String,
+    port: u16,
+}
+
+#[derive(Serialize)]
+struct StateView {
+    settings: Settings,
+    servers: Vec<ServerView>,
+    relay_names: Vec<String>,
+    server_errors: HashMap<String, String>,
+    net_error: Option<String>,
+    admin: bool,
+    windivert: bool,
+    xray: bool,
+    capturing: bool,
+}
+
+#[derive(Serialize, Clone)]
+struct CaptureView {
+    tcp_redirected: u64,
+    tunneled: u64,
+    direct: u64,
+    injected: u64,
+    inject_errors: u64,
+}
+
+#[derive(Serialize, Clone)]
+struct Tick {
+    snapshot: Option<Snapshot>,
+    capture: Option<CaptureView>,
+    capturing: bool,
+}
+
+impl AppState {
+    async fn view(&self) -> StateView {
+        let settings = self.settings.lock().clone();
+        let servers = settings
+            .subscriptions
+            .iter()
+            .filter(|s| s.enabled)
+            .flat_map(|sub| {
+                sub.servers.iter().map(move |srv| ServerView {
+                    key: sub.server_key(srv),
+                    name: srv.name.clone(),
+                    subscription: sub.name.clone(),
+                    protocol: srv.protocol.clone(),
+                    address: srv.address.clone(),
+                    port: srv.port,
+                })
+            })
+            .collect();
+        let relay_names = settings::parse_relays(&settings.relays_toml)
+            .map(|r| r.exits.into_iter().map(|e| e.name).collect())
+            .unwrap_or_default();
+        let net = self.net.lock().await;
+        let exe_dir = exe_dir();
+        StateView {
+            settings,
+            servers,
+            relay_names,
+            server_errors: net.server_errors.clone(),
+            net_error: net.error.clone(),
+            admin: sys::is_admin(),
+            windivert: exe_dir.join("WinDivert.dll").exists()
+                && exe_dir.join("WinDivert64.sys").exists(),
+            xray: self.xray_exe.is_some(),
+            capturing: net.capture.is_some(),
+        }
+    }
+
+    fn save(&self) -> Result<()> {
+        settings::save(&self.settings_path, &self.settings.lock())
+    }
+
+    /// Restarts xray and the engine from the current settings, keeping capture on if
+    /// it was on.
+    async fn rebuild(&self) {
+        let mut net = self.net.lock().await;
+        let was_capturing = net.capture.is_some();
+        self.stop_capture(&mut net);
+        net.engine = None;
+        net.xray = None;
+        net.server_errors.clear();
+        net.error = None;
+        if let Err(e) = self.build(&mut net).await {
+            warn!("network setup failed: {e:#}");
+            net.error = Some(format!("{e:#}"));
+        }
+        if was_capturing && let Err(e) = self.start_capture(&mut net) {
+            net.error = Some(format!("{e:#}"));
+        }
+    }
+
+    async fn build(&self, net: &mut Net) -> Result<()> {
+        let s = self.settings.lock().clone();
+        let relays = settings::parse_relays(&s.relays_toml)?;
+
+        let mut keys = Vec::new();
+        let mut servers = Vec::new();
+        for sub in s.subscriptions.iter().filter(|s| s.enabled) {
+            for srv in &sub.servers {
+                let key = sub.server_key(srv);
+                if !keys.contains(&key) {
+                    keys.push(key);
+                    servers.push(srv.clone());
+                }
+            }
+        }
+        let mut proxies = Vec::new();
+        if !servers.is_empty() {
+            let exe = self
+                .xray_exe
+                .as_ref()
+                .context("xray.exe is missing next to OpenLag")?;
+            let xray = Xray::start(exe, &self.work_dir.join("xray"), &servers).await?;
+            for (i, key) in keys.iter().enumerate() {
+                match (xray.socks[i], &xray.errors[i]) {
+                    (Some(socks), _) => proxies.push(ProxySpec {
+                        name: key.clone(),
+                        socks,
+                    }),
+                    (None, Some(e)) => {
+                        net.server_errors.insert(key.clone(), e.clone());
+                    }
+                    _ => {}
+                }
+            }
+            net.xray = Some(xray);
+        }
+        if proxies.is_empty() && relays.exits.is_empty() {
+            return Ok(());
+        }
+        let sink = self.sink.clone();
+        let downstream: DownstreamFn = Arc::new(move |d: Downstream<'_>| {
+            if let Some(f) = sink.read().as_ref() {
+                f(d);
+            }
+        });
+        let cfg = EngineConfig {
+            psk: relays.psk,
+            exits: relays.exits,
+            proxies,
+            preferred_exit: s.preferred_exit.clone(),
+            multipath: s.multipath.max(1),
+            probe_interval_ms: 250,
+            switch_margin_ms: 5.0,
+            flow_idle_secs: 120,
+        };
+        net.engine = Some(Arc::new(Engine::start(cfg, downstream).await?));
+        Ok(())
+    }
+
+    fn start_capture(&self, net: &mut Net) -> Result<()> {
+        if net.capture.is_some() {
+            return Ok(());
+        }
+        let s = self.settings.lock().clone();
+        let processes = s.selected_processes();
+        anyhow::ensure!(
+            s.all_except() || !processes.is_empty(),
+            "select at least one process"
+        );
+        let engine = net
+            .engine
+            .clone()
+            .context("add a subscription or a relay first")?;
+        anyhow::ensure!(sys::is_admin(), "capture needs Administrator rights");
+        // TCP is redirected to a local listener; Windows Firewall must let it in.
+        if let Err(e) = sys::ensure_firewall_rule() {
+            warn!("cannot add firewall rule: {e:#}");
+        }
+        let mut capture = Capture::open(&CaptureConfig {
+            processes,
+            mode: if s.all_except() {
+                Selection::AllExcept
+            } else {
+                Selection::Only
+            },
+            tunnel_existing: s.tunnel_existing,
+            // xray carries the tunnel itself and must never be captured.
+            exclude_pids: net
+                .xray
+                .as_ref()
+                .and_then(|x| x.pid())
+                .into_iter()
+                .collect(),
+        })?;
+        *self.sink.write() = Some(capture.downstream());
+        capture.start(engine);
+        net.capture = Some(capture);
+        info!("capture started");
+        Ok(())
+    }
+
+    fn stop_capture(&self, net: &mut Net) {
+        if let Some(mut c) = net.capture.take() {
+            c.stop();
+            info!("capture stopped");
+        }
+        *self.sink.write() = None;
+    }
+
+    async fn shutdown(&self) {
+        let mut net = self.net.lock().await;
+        self.stop_capture(&mut net);
+        net.engine = None;
+        net.xray = None;
+    }
+
+    fn fetch_options(&self) -> FetchOptions {
+        let s = self.settings.lock();
+        FetchOptions {
+            user_agent: s.user_agent.clone(),
+            hwid: Some(s.hwid.clone()),
+        }
+    }
+}
+
+fn exe_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(PathBuf::from))
+        .unwrap_or_default()
+}
+
+fn find_xray(resource_dir: Option<PathBuf>) -> Option<PathBuf> {
+    let mut candidates = vec![exe_dir().join("xray.exe")];
+    if let Some(r) = resource_dir {
+        candidates.push(r.join("xray.exe"));
+    }
+    if cfg!(debug_assertions) {
+        candidates
+            .push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vendor/xray/xray.exe"));
+    }
+    candidates.into_iter().find(|p| p.exists())
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+
+#[tauri::command]
+async fn get_state(st: Shared<'_>) -> CmdResult<StateView> {
+    Ok(st.view().await)
+}
+
+#[derive(Serialize)]
+struct AddResult {
+    name: String,
+    added: usize,
+    skipped: Vec<Skipped>,
+}
+
+#[tauri::command]
+async fn add_subscription(st: Shared<'_>, input: String) -> CmdResult<AddResult> {
+    let input = input.trim().to_string();
+    if input.is_empty() {
+        return Err("paste a subscription link or keys".into());
+    }
+    let is_url = ["http://", "https://", "happ://"]
+        .iter()
+        .any(|p| input.starts_with(p));
+    let (parsed, info, url) = if is_url {
+        let (p, i) = openlag_proxy::fetch(&input, &st.fetch_options())
+            .await
+            .map_err(err)?;
+        (p, i, Some(input.clone()))
+    } else {
+        (openlag_proxy::parse_text(&input), Default::default(), None)
+    };
+    if parsed.servers.is_empty() {
+        let reason = parsed
+            .skipped
+            .first()
+            .map(|s| s.reason.clone())
+            .unwrap_or_else(|| "no servers found".into());
+        return Err(reason);
+    }
+    let name = info
+        .title
+        .clone()
+        .filter(|t| !t.trim().is_empty())
+        .or_else(|| url.as_deref().and_then(host_of))
+        .or_else(|| (parsed.servers.len() == 1).then(|| parsed.servers[0].name.clone()))
+        .unwrap_or_else(|| "Мои ключи".into());
+    let result = AddResult {
+        name: name.clone(),
+        added: parsed.servers.len(),
+        skipped: parsed.skipped.clone(),
+    };
+    st.settings.lock().subscriptions.push(Subscription {
+        id: format!("{:08x}", rand::random::<u32>()),
+        name,
+        url,
+        enabled: true,
+        servers: parsed.servers,
+        skipped: parsed.skipped,
+        info,
+        updated_at: settings::now(),
+    });
+    st.save().map_err(err)?;
+    st.rebuild().await;
+    Ok(result)
+}
+
+fn host_of(url: &str) -> Option<String> {
+    let rest = url.split("://").nth(1)?;
+    Some(rest.split(['/', '?', ':']).next()?.to_string()).filter(|h| !h.is_empty())
+}
+
+/// Re-downloads one subscription. Returns false if it has no URL.
+async fn refresh_one(st: &AppState, id: &str) -> Result<bool> {
+    let url = {
+        let s = st.settings.lock();
+        let sub = s
+            .subscriptions
+            .iter()
+            .find(|s| s.id == id)
+            .context("subscription not found")?;
+        match &sub.url {
+            Some(u) => u.clone(),
+            None => return Ok(false),
+        }
+    };
+    let (parsed, info) = openlag_proxy::fetch(&url, &st.fetch_options()).await?;
+    anyhow::ensure!(
+        !parsed.servers.is_empty(),
+        "the subscription returned no usable servers"
+    );
+    let mut s = st.settings.lock();
+    if let Some(sub) = s.subscriptions.iter_mut().find(|s| s.id == id) {
+        sub.servers = parsed.servers;
+        sub.skipped = parsed.skipped;
+        if let Some(t) = info.title.clone().filter(|t| !t.trim().is_empty()) {
+            sub.name = t;
+        }
+        sub.info = info;
+        sub.updated_at = settings::now();
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+async fn refresh_subscription(st: Shared<'_>, id: String) -> CmdResult<()> {
+    refresh_one(&st, &id).await.map_err(err)?;
+    st.save().map_err(err)?;
+    st.rebuild().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn remove_subscription(st: Shared<'_>, id: String) -> CmdResult<()> {
+    st.settings.lock().subscriptions.retain(|s| s.id != id);
+    st.save().map_err(err)?;
+    st.rebuild().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn toggle_subscription(st: Shared<'_>, id: String, enabled: bool) -> CmdResult<()> {
+    if let Some(s) = st
+        .settings
+        .lock()
+        .subscriptions
+        .iter_mut()
+        .find(|s| s.id == id)
+    {
+        s.enabled = enabled;
+    }
+    st.save().map_err(err)?;
+    st.rebuild().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_preferred(st: Shared<'_>, key: Option<String>) -> CmdResult<()> {
+    st.settings.lock().preferred_exit = key.clone();
+    st.save().map_err(err)?;
+    if let Some(engine) = &st.net.lock().await.engine {
+        engine.set_preferred_exit(key);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_selection(st: Shared<'_>, groups: Vec<ProcessGroup>, mode: String) -> CmdResult<()> {
+    let groups = groups
+        .into_iter()
+        .map(|mut g| {
+            let mut p: Vec<String> = g
+                .processes
+                .iter()
+                .map(|x| exe_name(x))
+                .filter(|x| !x.is_empty())
+                .collect();
+            p.sort();
+            p.dedup();
+            g.processes = p;
+            if g.id.is_empty() {
+                g.id = settings::new_id();
+            }
+            g
+        })
+        .collect();
+    {
+        let mut s = st.settings.lock();
+        s.groups = groups;
+        s.mode = if mode == "all_except" {
+            mode
+        } else {
+            "only".into()
+        };
+    }
+    st.save().map_err(err)?;
+    // Capture reads the selection at start.
+    let mut net = st.net.lock().await;
+    if net.capture.is_some() {
+        st.stop_capture(&mut net);
+        st.start_capture(&mut net).map_err(err)?;
+    }
+    Ok(())
+}
+
+/// `C:\Games\Foo\Foo.exe` or `Foo` -> `foo.exe`.
+fn exe_name(s: &str) -> String {
+    let name = s
+        .trim()
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    if name.is_empty() || name.ends_with(".exe") {
+        name
+    } else {
+        format!("{name}.exe")
+    }
+}
+
+#[tauri::command]
+async fn pick_exe(app: tauri::AppHandle) -> CmdResult<Vec<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let files = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("Выберите программы")
+            .add_filter("Программы", &["exe"])
+            .blocking_pick_files()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(files
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|f| f.into_path().ok())
+        .map(|p| exe_name(&p.to_string_lossy()))
+        .collect())
+}
+
+#[tauri::command]
+async fn set_options(
+    st: Shared<'_>,
+    multipath: usize,
+    tunnel_existing: bool,
+    user_agent: String,
+) -> CmdResult<()> {
+    {
+        let mut s = st.settings.lock();
+        s.multipath = multipath.clamp(1, 4);
+        s.tunnel_existing = tunnel_existing;
+        if !user_agent.trim().is_empty() {
+            s.user_agent = user_agent.trim().to_string();
+        }
+    }
+    st.save().map_err(err)?;
+    st.rebuild().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_relays(st: Shared<'_>, text: String) -> CmdResult<()> {
+    settings::parse_relays(&text).map_err(err)?;
+    st.settings.lock().relays_toml = text;
+    st.save().map_err(err)?;
+    st.rebuild().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn list_processes() -> CmdResult<Vec<String>> {
+    tauri::async_runtime::spawn_blocking(sys::process_names)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn start(st: Shared<'_>) -> CmdResult<()> {
+    let mut net = st.net.lock().await;
+    st.start_capture(&mut net).map_err(err)
+}
+
+#[tauri::command]
+async fn stop(st: Shared<'_>) -> CmdResult<()> {
+    let mut net = st.net.lock().await;
+    st.stop_capture(&mut net);
+    Ok(())
+}
+
+#[tauri::command]
+async fn relaunch_admin(app: tauri::AppHandle, st: Shared<'_>) -> CmdResult<()> {
+    // Release WinDivert and xray first; the new instance starts its own.
+    st.shutdown().await;
+    if !sys::relaunch_as_admin() {
+        st.rebuild().await;
+        return Err("Administrator rights were not granted".into());
+    }
+    app.exit(0);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+
+fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .with_target(false)
+        .init();
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            let data_dir = app.path().app_data_dir()?;
+            let settings_path = data_dir.join("settings.json");
+            let settings = settings::load(&settings_path);
+            let state = Arc::new(AppState {
+                settings: parking_lot::Mutex::new(settings),
+                settings_path,
+                work_dir: data_dir,
+                xray_exe: find_xray(app.path().resource_dir().ok()),
+                net: tokio::sync::Mutex::new(Net::default()),
+                sink: Arc::default(),
+            });
+            let _ = state.save(); // persist the generated device id
+            app.manage(state.clone());
+
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                state.rebuild().await;
+                tauri::async_runtime::spawn(auto_refresh(state.clone()));
+                loop {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    // Skip a tick while a rebuild holds the lock.
+                    let Ok(net) = state.net.try_lock() else {
+                        continue;
+                    };
+                    let tick = Tick {
+                        snapshot: net.engine.as_ref().map(|e| e.snapshot()),
+                        capture: net.capture.as_ref().map(|c| {
+                            let s = c.stats();
+                            CaptureView {
+                                tcp_redirected: s.tcp_redirected,
+                                tunneled: s.tunneled,
+                                direct: s.direct,
+                                injected: s.injected,
+                                inject_errors: s.inject_errors,
+                            }
+                        }),
+                        capturing: net.capture.is_some(),
+                    };
+                    drop(net);
+                    let _ = handle.emit("tick", tick);
+                }
+            });
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_state,
+            add_subscription,
+            refresh_subscription,
+            remove_subscription,
+            toggle_subscription,
+            set_preferred,
+            set_selection,
+            pick_exe,
+            set_options,
+            set_relays,
+            list_processes,
+            start,
+            stop,
+            relaunch_admin,
+        ])
+        .build(tauri::generate_context!())
+        .expect("failed to build OpenLag")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Close WinDivert handles and stop xray before the process ends.
+                let st = app.state::<Arc<AppState>>().inner().clone();
+                tauri::async_runtime::block_on(st.shutdown());
+            }
+        });
+}
+
+/// Refreshes subscriptions whose update interval has passed, on start and every hour.
+async fn auto_refresh(st: Arc<AppState>) {
+    loop {
+        let due: Vec<String> = {
+            let s = st.settings.lock();
+            let now = settings::now();
+            s.subscriptions
+                .iter()
+                .filter(|sub| sub.url.is_some())
+                .filter(|sub| {
+                    let hours = sub.info.update_interval_hours.unwrap_or(12).max(1) as u64;
+                    now.saturating_sub(sub.updated_at) >= hours * 3600
+                })
+                .map(|sub| sub.id.clone())
+                .collect()
+        };
+        let mut changed = false;
+        for id in due {
+            match refresh_one(&st, &id).await {
+                Ok(true) => changed = true,
+                Ok(false) => {}
+                Err(e) => warn!("auto-refresh of subscription {id} failed: {e:#}"),
+            }
+        }
+        if changed {
+            let _ = st.save();
+            st.rebuild().await;
+        }
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+    }
+}

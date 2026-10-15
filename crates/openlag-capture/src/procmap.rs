@@ -1,21 +1,26 @@
-//! Which process owns a local UDP port.
+//! Which process owns a local TCP or UDP port.
 //!
-//! Fed live by WinDivert SOCKET-layer events, with the system UDP table as a fallback:
-//! a game's first datagram can reach the network layer before we have processed the
-//! BIND event of its socket.
+//! Fed live by WinDivert SOCKET-layer events, with the system TCP/UDP tables as a
+//! fallback: a program's first packet can reach the network layer before we have
+//! processed the bind/connect event of its socket.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
-use windows_sys::Win32::NetworkManagement::IpHelper::{GetExtendedUdpTable, UDP_TABLE_OWNER_PID};
+use windows_sys::Win32::NetworkManagement::IpHelper::{
+    GetExtendedTcpTable, GetExtendedUdpTable, TCP_TABLE_OWNER_PID_ALL, UDP_TABLE_OWNER_PID,
+};
 use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
 use windows_sys::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 
-/// Don't rescan the UDP table more often than this on lookup misses.
+pub const TCP: u8 = 6;
+pub const UDP: u8 = 17;
+
+/// Don't rescan the system tables more often than this on lookup misses.
 const SNAPSHOT_MIN_INTERVAL: Duration = Duration::from_millis(100);
 /// PIDs are reused by Windows; re-resolve names after this long.
 const NAME_TTL: Duration = Duration::from_secs(30);
@@ -27,44 +32,45 @@ pub struct ProcessMap {
 
 #[derive(Default)]
 struct State {
-    port_pid: HashMap<u16, u32>,
+    owners: HashMap<(u8, u16), u32>,
     names: HashMap<u32, (Option<String>, Instant)>,
-    last_snapshot: Option<Instant>,
+    last_snapshot: HashMap<u8, Instant>,
 }
 
 impl ProcessMap {
-    pub fn on_bind(&self, port: u16, pid: u32) {
+    pub fn on_bind(&self, proto: u8, port: u16, pid: u32) {
         let mut st = self.state.lock();
-        if st.port_pid.insert(port, pid) != Some(pid) {
+        if st.owners.insert((proto, port), pid) != Some(pid) {
             // New owner: make sure its name is resolved fresh.
             st.names.remove(&pid);
         }
     }
 
-    pub fn on_close(&self, port: u16, pid: u32) {
+    pub fn on_close(&self, proto: u8, port: u16, pid: u32) {
         let mut st = self.state.lock();
-        if st.port_pid.get(&port) == Some(&pid) {
-            st.port_pid.remove(&port);
+        if st.owners.get(&(proto, port)) == Some(&pid) {
+            st.owners.remove(&(proto, port));
         }
     }
 
-    pub fn pid_for_port(&self, port: u16) -> Option<u32> {
+    pub fn pid_for_port(&self, proto: u8, port: u16) -> Option<u32> {
         let mut st = self.state.lock();
-        if let Some(pid) = st.port_pid.get(&port) {
+        if let Some(pid) = st.owners.get(&(proto, port)) {
             return Some(*pid);
         }
         let now = Instant::now();
         if st
             .last_snapshot
-            .is_some_and(|t| now - t < SNAPSHOT_MIN_INTERVAL)
+            .get(&proto)
+            .is_some_and(|t| now - *t < SNAPSHOT_MIN_INTERVAL)
         {
             return None;
         }
-        st.last_snapshot = Some(now);
-        for (port, pid) in udp_table() {
-            st.port_pid.insert(port, pid);
+        st.last_snapshot.insert(proto, now);
+        for (port, pid) in port_table(proto) {
+            st.owners.insert((proto, port), pid);
         }
-        st.port_pid.get(&port).copied()
+        st.owners.get(&(proto, port)).copied()
     }
 
     /// Lower-case executable file name, e.g. `cs2.exe`.
@@ -82,15 +88,20 @@ impl ProcessMap {
     }
 }
 
-/// All (local port, pid) pairs of UDP sockets, IPv4 and IPv6.
-pub fn udp_table() -> Vec<(u16, u32)> {
+/// All (local port, pid) pairs for TCP or UDP sockets, IPv4 and IPv6.
+pub fn port_table(proto: u8) -> Vec<(u16, u32)> {
+    // Row layouts (bytes): MIB_UDPROW_OWNER_PID addr,port,pid = 12;
+    // MIB_UDP6ROW_OWNER_PID addr[16],scope,port,pid = 28;
+    // MIB_TCPROW_OWNER_PID state,laddr,lport,raddr,rport,pid = 24;
+    // MIB_TCP6ROW_OWNER_PID laddr[16],scope,lport,raddr[16],scope,rport,state,pid = 56.
+    let layouts: [(u16, usize, usize, usize); 2] = if proto == TCP {
+        [(AF_INET, 24, 8, 20), (AF_INET6, 56, 20, 52)]
+    } else {
+        [(AF_INET, 12, 4, 8), (AF_INET6, 28, 20, 24)]
+    };
     let mut out = Vec::new();
-    // Row layouts: MIB_UDPROW_OWNER_PID is addr, port, pid (12 bytes);
-    // MIB_UDP6ROW_OWNER_PID is addr[16], scope, port, pid (28 bytes).
-    for (family, row, port_off, pid_off) in
-        [(AF_INET, 12usize, 4usize, 8usize), (AF_INET6, 28, 20, 24)]
-    {
-        let Some(buf) = raw_table(family as u32) else {
+    for (family, row, port_off, pid_off) in layouts {
+        let Some(buf) = raw_table(proto, family as u32) else {
             continue;
         };
         let n = u32::from_ne_bytes(buf[0..4].try_into().unwrap()) as usize;
@@ -113,24 +124,22 @@ pub fn udp_table() -> Vec<(u16, u32)> {
     out
 }
 
-fn raw_table(family: u32) -> Option<Vec<u8>> {
+fn raw_table(proto: u8, family: u32) -> Option<Vec<u8>> {
     let mut size = 0u32;
     let mut buf: Vec<u8> = Vec::new();
     for _ in 0..4 {
+        let ptr = if buf.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            buf.as_mut_ptr().cast()
+        };
         // SAFETY: size describes buf's capacity; null is allowed to query the size.
         let rc = unsafe {
-            GetExtendedUdpTable(
-                if buf.is_empty() {
-                    std::ptr::null_mut()
-                } else {
-                    buf.as_mut_ptr().cast()
-                },
-                &mut size,
-                0,
-                family,
-                UDP_TABLE_OWNER_PID,
-                0,
-            )
+            if proto == TCP {
+                GetExtendedTcpTable(ptr, &mut size, 0, family, TCP_TABLE_OWNER_PID_ALL, 0)
+            } else {
+                GetExtendedUdpTable(ptr, &mut size, 0, family, UDP_TABLE_OWNER_PID, 0)
+            }
         };
         if rc == NO_ERROR {
             buf.truncate(size as usize);
@@ -140,7 +149,7 @@ fn raw_table(family: u32) -> Option<Vec<u8>> {
             return None;
         }
         // The table can grow between calls; leave some slack.
-        buf = vec![0u8; size as usize + 1024];
+        buf = vec![0u8; size as usize + 4096];
         size = buf.len() as u32;
     }
     None
@@ -178,13 +187,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn finds_own_udp_socket_and_name() {
-        let s = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        let port = s.local_addr().unwrap().port();
+    fn finds_own_sockets_and_name() {
+        let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let map = ProcessMap::default();
-        let pid = map.pid_for_port(port).expect("own socket not in UDP table");
-        assert_eq!(pid, std::process::id());
-        let name = map.name(pid).unwrap();
+        for (proto, port) in [
+            (UDP, udp.local_addr().unwrap().port()),
+            (TCP, tcp.local_addr().unwrap().port()),
+        ] {
+            let pid = map
+                .pid_for_port(proto, port)
+                .expect("own socket not in table");
+            assert_eq!(pid, std::process::id());
+        }
+        let name = map.name(std::process::id()).unwrap();
         assert!(name.ends_with(".exe"), "{name}");
     }
 }

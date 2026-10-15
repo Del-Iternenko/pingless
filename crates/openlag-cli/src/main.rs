@@ -50,6 +50,9 @@ struct CaptureSection {
     processes: Vec<String>,
     #[serde(default)]
     tunnel_existing: bool,
+    /// `only` (default) or `all_except`.
+    #[serde(default)]
+    mode: String,
 }
 
 fn load(path: &PathBuf) -> Result<Config> {
@@ -81,15 +84,22 @@ async fn probe(cfg: Config) -> Result<()> {
 
 #[cfg(windows)]
 async fn run(cfg: Config) -> Result<()> {
-    use openlag_capture::{Capture, CaptureConfig};
+    use openlag_capture::{Capture, CaptureConfig, Selection};
 
+    let mode = match cfg.capture.mode.as_str() {
+        "" | "only" => Selection::Only,
+        "all_except" => Selection::AllExcept,
+        other => anyhow::bail!("[capture] mode must be \"only\" or \"all_except\", not {other:?}"),
+    };
     anyhow::ensure!(
-        !cfg.capture.processes.is_empty(),
+        mode == Selection::AllExcept || !cfg.capture.processes.is_empty(),
         "[capture] processes is empty: nothing to tunnel"
     );
     let mut capture = Capture::open(&CaptureConfig {
         processes: cfg.capture.processes.clone(),
+        mode,
         tunnel_existing: cfg.capture.tunnel_existing,
+        exclude_pids: vec![],
     })?;
     let engine = Arc::new(Engine::start(cfg.engine, capture.downstream()).await?);
 
@@ -107,8 +117,8 @@ async fn run(cfg: Config) -> Result<()> {
     let result = dashboard(&engine, || {
         let s = capture.stats();
         format!(
-            "capture: tunneled {}  direct {}  injected {}  inject errors {}",
-            s.tunneled, s.direct, s.injected, s.inject_errors
+            "capture: udp tunneled {}  direct {}  injected {}  tcp redirected {}  inject errors {}",
+            s.tunneled, s.direct, s.injected, s.tcp_redirected, s.inject_errors
         )
     })
     .await;
@@ -227,10 +237,7 @@ fn check() -> Result<()> {
             if ok { "ok  " } else { "MISS" }
         );
     }
-    match openlag_capture::Capture::open(&openlag_capture::CaptureConfig {
-        processes: vec![],
-        tunnel_existing: false,
-    }) {
+    match openlag_capture::Capture::open(&openlag_capture::CaptureConfig::default()) {
         Ok(mut c) => {
             c.stop();
             println!("ok   WinDivert opened: capture works on this machine");

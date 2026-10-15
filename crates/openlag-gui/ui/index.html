@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenLag</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
+      <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></symbol>
+      <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></symbol>
+      <symbol id="i-game" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="4"/><path d="M6 12h4M8 10v4M15 11h.01M18 13h.01"/></symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+      <symbol id="i-smile" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></symbol>
+      <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="M12 8v5M12 16h.01"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5 10 17l9-10"/></symbol>
+      <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+      <symbol id="i-backspace" viewBox="0 0 24 24"><path d="M21 5H9l-6 7 6 7h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z"/><path d="m17 9-5 6M12 9l5 6"/></symbol>
+      <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></symbol>
+    </defs>
+  </svg>
+
+  <aside class="sidebar">
+    <div class="brand">
+      <img src="logo.png" alt="" width="32" height="32">
+      <span>OpenLag</span>
+    </div>
+    <nav>
+      <button class="nav active" data-page="home"><svg class="ic"><use href="#i-home"/></svg>Главная</button>
+      <button class="nav" data-page="servers"><svg class="ic"><use href="#i-server"/></svg>Серверы</button>
+      <button class="nav" data-page="subs"><svg class="ic"><use href="#i-link"/></svg>Подписки</button>
+      <button class="nav" data-page="procs"><svg class="ic"><use href="#i-cpu"/></svg>Процессы</button>
+      <button class="nav" data-page="settings"><svg class="ic"><use href="#i-sliders"/></svg>Настройки</button>
+      <button class="nav" data-page="fun"><svg class="ic"><use href="#i-smile"/></svg>Фан</button>
+    </nav>
+    <div class="side-status" id="side-status"></div>
+  </aside>
+
+  <main>
+    <!-- HOME -->
+    <section class="page active" id="page-home">
+      <div id="alerts"></div>
+      <div class="hero card">
+        <button class="power" id="power" aria-label="Включить оптимизацию">
+          <svg class="ic-xl"><use href="#i-power"/></svg>
+        </button>
+        <div class="hero-text">
+          <div class="hero-state" id="hero-state">Выключено</div>
+          <div class="hero-sub" id="hero-sub">Нажмите, чтобы пустить игры через выбранный сервер</div>
+          <div class="hero-exit">
+            <span class="label">Сервер</span>
+            <span id="hero-exit">—</span>
+          </div>
+        </div>
+        <div class="hero-kpi">
+          <div class="kpi-big" id="kpi-ping">—</div>
+          <div class="label">пинг до сервера, мс</div>
+        </div>
+      </div>
+
+      <div class="kpis">
+        <div class="card kpi"><div class="label">Джиттер</div><div class="kpi-val" id="kpi-jitter">—</div></div>
+        <div class="card kpi"><div class="label">Потери</div><div class="kpi-val" id="kpi-loss">—</div></div>
+        <div class="card kpi"><div class="label">Пакетов через туннель</div><div class="kpi-val" id="kpi-tunneled">0</div></div>
+        <div class="card kpi"><div class="label">Соединений</div><div class="kpi-val" id="kpi-flows">0</div></div>
+      </div>
+
+      <div class="card chart-card">
+        <div class="card-head">
+          <h3>Пинг, мс <span class="muted" id="chart-title"></span></h3>
+          <div class="legend" id="legend"></div>
+        </div>
+        <canvas id="chart-ping" height="200"></canvas>
+      </div>
+      <div class="card chart-card">
+        <div class="card-head"><h3>Потери пакетов, %</h3></div>
+        <canvas id="chart-loss" height="110"></canvas>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>Соединения</h3><span class="muted" id="flows-count"></span></div>
+        <table class="table">
+          <thead><tr><th>Тип</th><th>Куда</th><th>Через</th><th class="num">Отправлено</th><th class="num">Получено</th></tr></thead>
+          <tbody id="flows"><tr><td colspan="5" class="empty">Пока нет. Включите оптимизацию и запустите программу.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- SERVERS -->
+    <section class="page" id="page-servers">
+      <div class="page-head">
+        <h2>Серверы</h2>
+        <div class="row">
+          <input type="search" id="server-filter" placeholder="Поиск">
+          <button class="btn" id="auto-btn"><svg class="ic"><use href="#i-zap"/></svg>Авто</button>
+        </div>
+      </div>
+      <p class="hint">Пинг меряется по UDP через сам сервер, так же как пойдут пакеты игры. Новые соединения игры идут через выбранный сервер, а в режиме «Авто» через сервер с лучшим пингом.</p>
+      <div id="server-list" class="list"></div>
+    </section>
+
+    <!-- SUBSCRIPTIONS -->
+    <section class="page" id="page-subs">
+      <div class="page-head"><h2>Подписки</h2></div>
+      <div class="card">
+        <label class="label" for="sub-input">Ссылка на подписку или ключи</label>
+        <textarea id="sub-input" rows="3" placeholder="https://… (Happ, Incy, Marzban, Remnawave)&#10;vless://…  vmess://…  trojan://…  ss://…&#10;vpn://… (Amnezia, протокол Xray)"></textarea>
+        <div class="row space">
+          <span class="hint">Ссылку на подписку даёт VPN-сервис: в личном кабинете или в Telegram-боте, обычно кнопка «Подключить» или «Скопировать ссылку».</span>
+          <button class="btn primary" id="sub-add"><svg class="ic"><use href="#i-plus"/></svg>Добавить</button>
+        </div>
+      </div>
+      <div id="sub-list" class="list"></div>
+    </section>
+
+    <!-- PROCESSES -->
+    <section class="page" id="page-procs">
+      <div class="page-head">
+        <h2>Процессы</h2>
+        <button class="btn" id="group-new"><svg class="ic"><use href="#i-plus"/></svg>Новая группа</button>
+      </div>
+      <div class="card">
+        <div class="seg" id="mode-seg">
+          <button data-mode="only">Только выбранные</button>
+          <button data-mode="all_except">Всё, кроме выбранных</button>
+        </div>
+        <p class="hint" id="mode-hint"></p>
+      </div>
+      <div class="procs-grid">
+        <div class="list" id="group-list"></div>
+        <div class="card running">
+          <div class="card-head">
+            <h3>Запущенные <span class="muted" id="proc-target"></span></h3>
+            <button class="btn icon" id="proc-refresh" aria-label="Обновить"><svg class="ic"><use href="#i-refresh"/></svg></button>
+          </div>
+          <input type="search" id="proc-filter" placeholder="Поиск" style="width:100%;margin-bottom:10px">
+          <div id="proc-list" class="proc-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="page" id="page-settings">
+      <div class="page-head"><h2>Настройки</h2></div>
+      <div class="card form">
+        <label class="field">
+          <span>Multipath: сколько маршрутов несут каждый пакет</span>
+          <select id="opt-multipath">
+            <option value="1">1 (выключено)</option><option value="2">2</option><option value="3">3</option><option value="4">4</option>
+          </select>
+          <small>Работает для своих relay-серверов: пакет идёт по нескольким маршрутам сразу, доходит первый. VPN-сервер из подписки — это всегда один маршрут.</small>
+        </label>
+        <label class="field check">
+          <input type="checkbox" id="opt-existing">
+          <span>Переводить в туннель уже открытые соединения<small>Обычно выкидывает из идущего матча. Лучше включать OpenLag до запуска игры.</small></span>
+        </label>
+        <label class="field">
+          <span>User-Agent для загрузки подписок</span>
+          <input id="opt-ua">
+          <small>Некоторые панели отдают разный формат в зависимости от него.</small>
+        </label>
+        <div class="row end"><button class="btn primary" id="opt-save">Сохранить</button></div>
+      </div>
+      <div class="card form">
+        <div class="card-head"><h3>Свои relay-серверы</h3></div>
+        <textarea id="opt-relays" rows="8" spellcheck="false" placeholder='psk = "секрет"&#10;&#10;[[exits]]&#10;name = "Франкфурт"&#10;routes = [&#10;  { name = "direct", via = "203.0.113.10:7000" },&#10;  { name = "bridge", via = "198.51.100.20:7001" },&#10;]'></textarea>
+        <div class="row end"><button class="btn" id="relays-save">Сохранить relay</button></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Состояние</h3></div>
+        <div id="sys-info" class="sys-info"></div>
+      </div>
+    </section>
+
+    <!-- FUN -->
+    <section class="page" id="page-fun">
+      <div class="page-head"><h2>Фан</h2><span class="muted">пока пинг грузится</span></div>
+      <div class="fun-grid">
+        <div class="card">
+          <div class="card-head"><h3>Калькулятор</h3></div>
+          <div class="calc">
+            <div class="calc-screen"><div id="calc-expr" class="calc-expr"></div><div id="calc-out" class="calc-out">0</div></div>
+            <div class="calc-keys" id="calc-keys"></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h3>Змейка</h3>
+            <div class="muted">Счёт <b id="snake-score">0</b> · Рекорд <b id="snake-best">0</b></div>
+          </div>
+          <canvas id="snake" width="400" height="400" tabindex="0" aria-label="Змейка: стрелки или WASD, пробел — пауза"></canvas>
+          <div class="row space">
+            <span class="hint">Стрелки или WASD, пробел — пауза</span>
+            <button class="btn" id="snake-start">Играть</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toasts" aria-live="polite"></div>
+  <script src="chart.js"></script>
+  <script src="fun.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

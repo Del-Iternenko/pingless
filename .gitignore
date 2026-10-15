@@ -6,3 +6,4 @@ config.toml
 # Notes on a commercial product; kept locally, not published.
 docs/exitlag-analysis.md
 /vendor
+/crates/openlag-gui/gen

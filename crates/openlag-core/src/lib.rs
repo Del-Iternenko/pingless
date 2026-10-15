@@ -9,7 +9,9 @@ mod config;
 mod engine;
 mod socks;
 mod stats;
+mod tcp;
 
 pub use config::{EngineConfig, ExitSpec, ProxySpec, RouteSpec};
 pub use engine::{Downstream, DownstreamFn, Engine, FlowKey, Upstream};
 pub use stats::{FlowSnapshot, PathSnapshot, Snapshot};
+pub use tcp::TcpSnapshot;
