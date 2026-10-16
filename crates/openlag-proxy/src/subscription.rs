@@ -244,7 +244,7 @@ mod tests {
 
     #[test]
     fn base64_list_with_bad_entries() {
-        let list = "vless://id@1.1.1.1:443?security=none#A\nhysteria2://x@h:1#H\n\ntrojan://pw@t.example:443#T\n";
+        let list = "vless://id@1.1.1.1:443?security=none#A\ntuic://x@h:1#H\n\ntrojan://pw@t.example:443#T\n";
         let p = parse_text(&base64::engine::general_purpose::STANDARD.encode(list));
         assert_eq!(p.servers.len(), 2);
         assert_eq!(p.skipped.len(), 1);

@@ -42,7 +42,8 @@ pub fn parse_link(link: &str) -> Result<ProxyServer> {
         "vmess" => parse_vmess(link),
         "ss" => parse_ss(link),
         "wireguard" | "wg" => crate::wireguard::parse_link(link),
-        "hysteria2" | "hy2" | "tuic" | "socks" | "http" | "https" => {
+        "hysteria2" | "hy2" => parse_hysteria2(link),
+        "tuic" | "socks" | "http" | "https" => {
             bail!("{scheme}:// is not supported yet")
         }
         _ => bail!("unknown link type {scheme}://"),
@@ -239,6 +240,48 @@ fn parse_vmess(link: &str) -> Result<ProxyServer> {
     })
 }
 
+/// `hysteria2://auth@host:port/?sni=..&obfs=salamander&obfs-password=..&pinSHA256=..#name`
+/// QUIC-based, so game UDP rides on datagrams without TCP head-of-line blocking.
+fn parse_hysteria2(link: &str) -> Result<ProxyServer> {
+    let p = split(link)?;
+    let q = |k: &str| p.query.get(k).filter(|v| !v.is_empty()).cloned();
+    anyhow::ensure!(!p.user.is_empty(), "hysteria2 link has no password");
+    let mut tls = json!({
+        "serverName": q("sni").or_else(|| q("peer")).unwrap_or_else(|| p.host.clone()),
+        "alpn": ["h3"],
+    });
+    if let Some(pin) = q("pinSHA256").or_else(|| q("pcs")) {
+        tls["pinnedPeerCertSha256"] = json!(pin.replace(':', "").to_lowercase());
+    }
+    let mut stream = json!({
+        "network": "hysteria",
+        "hysteriaSettings": { "version": 2, "auth": p.user },
+        "security": "tls",
+        "tlsSettings": tls,
+    });
+    match q("obfs").as_deref() {
+        None | Some("none") => {}
+        Some("salamander") => {
+            let pw = q("obfs-password")
+                .ok_or_else(|| anyhow!("salamander obfs without obfs-password"))?;
+            stream["finalmask"] =
+                json!({ "udp": [{ "type": "salamander", "settings": { "password": pw } }] });
+        }
+        Some(other) => bail!("hysteria2 obfs {other} is not supported"),
+    }
+    Ok(ProxyServer {
+        name: display_name(&p.name, &p.host, p.port),
+        protocol: "hysteria2".into(),
+        address: p.host.clone(),
+        port: p.port,
+        outbound: json!({
+            "protocol": "hysteria",
+            "settings": { "version": 2, "address": p.host, "port": p.port },
+            "streamSettings": stream,
+        }),
+    })
+}
+
 fn parse_ss(link: &str) -> Result<ProxyServer> {
     let body = link.split_once("://").map(|(_, r)| r).unwrap_or_default();
     let (body, name) = match body.split_once('#') {
@@ -388,11 +431,13 @@ fn stream_settings(
             if let Some(alpn) = alpn {
                 t["alpn"] = json!(alpn);
             }
-            if matches!(
-                get("allowInsecure").or_else(|| get("insecure")).as_deref(),
-                Some("1" | "true")
-            ) {
-                t["allowInsecure"] = json!(true);
+            // xray 26 removed "allowInsecure"; links now carry a pinned certificate
+            // hash (pcs) or a name to verify (vcn). A bare insecure=1 cannot be honoured.
+            if let Some(pcs) = get("pcs") {
+                t["pinnedPeerCertSha256"] = json!(pcs);
+            }
+            if let Some(vcn) = get("vcn") {
+                t["verifyPeerCertByName"] = json!(vcn);
             }
             s.insert("security".into(), json!("tls"));
             s.insert("tlsSettings".into(), t);
@@ -506,7 +551,7 @@ mod tests {
     #[test]
     fn unsupported_is_reported() {
         assert!(
-            parse_link("hysteria2://x@h:1")
+            parse_link("tuic://x@h:1")
                 .unwrap_err()
                 .to_string()
                 .contains("not supported")

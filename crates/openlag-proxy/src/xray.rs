@@ -120,6 +120,9 @@ pub fn build_config_with(servers: &[(ProxyServer, u16)], opts: &XrayOptions) -> 
             out["streamSettings"] = json!({});
         }
         let st = &mut out["streamSettings"];
+        if let Some(t) = st.get_mut("tlsSettings").and_then(Value::as_object_mut) {
+            t.remove("allowInsecure");
+        }
         if let Some(fp) = &opts.fingerprint {
             for key in ["tlsSettings", "realitySettings"] {
                 if st.get(key).is_some_and(Value::is_object) {

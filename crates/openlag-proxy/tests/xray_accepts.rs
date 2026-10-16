@@ -17,6 +17,8 @@ const LINKS: &[&str] = &[
     "vless://11111111-2222-4333-8444-555555555555@g.example.com:443?type=grpc&security=tls&serviceName=svc#grpc",
     "trojan://password@t.example.com:443?sni=t.example.com#trojan",
     "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpzZWNyZXQ@1.2.3.4:8388#ss",
+    "hysteria2://pass%40word@hy.example.com:8443/?sni=hy.example.com&obfs=salamander&obfs-password=xyz&pinSHA256=2D:71:16:42:B7:26:B0:44:01:62:7C:A9:FB:AC:32:F5:C8:53:0F:B1:90:3C:C4:DB:02:25:87:17:92:1A:48:81#hy2",
+    "vless://11111111-2222-4333-8444-555555555555@i.example.com:443?type=tcp&security=tls&insecure=1&sni=i.example.com#insecure",
     "wireguard://yAnz5TF%2BlXXJte14tji3zlMNq%2Bhd2rYUIgJBgB3fBmk%3D@203.0.113.5:51820?publickey=xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg%3D&address=10.0.0.2%2F32,fd00::2%2F128&mtu=1420#wg",
 ];
 
