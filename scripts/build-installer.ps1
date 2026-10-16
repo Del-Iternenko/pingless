@@ -41,6 +41,7 @@ New-Item -ItemType Directory -Force (Join-Path $core 'licenses'), (Join-Path $ex
 
 Copy-Item (Join-Path $release 'openlag-gui.exe') (Join-Path $core 'OpenLag.exe')
 Copy-Item LICENSE-MIT (Join-Path $core 'licenses\OpenLag-LICENSE.txt')
+Copy-Item LICENSE-APACHE (Join-Path $core 'licenses\OpenLag-LICENSE-APACHE.txt')
 $relayDir = New-Item -ItemType Directory -Force (Join-Path $core 'relay')
 foreach ($t in 'x86_64', 'aarch64') {
     Copy-Item (Join-Path $env:CARGO_TARGET_DIR "$t-unknown-linux-musl\release\openlag-relay") (Join-Path $relayDir "openlag-relay-$t")
