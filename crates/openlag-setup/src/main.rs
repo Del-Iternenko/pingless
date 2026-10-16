@@ -285,6 +285,8 @@ fn run_uninstall(app: &AppHandle, remove_settings: bool) -> Result<()> {
     stop_running(&dir);
     emit(app, 30.0, "Убираю автозапуск и правило брандмауэра…");
     let _ = hidden("schtasks", &["/Delete", "/TN", "OpenLag", "/F"]);
+    // openlag:// links, registered by the app itself.
+    let _ = hidden("reg", &["delete", r"HKCU\Software\Classes\openlag", "/f"]);
     let _ = hidden(
         "netsh",
         &[

@@ -294,9 +294,23 @@ function serverRow(key) {
     <div class="metric m-loss"><span></span><small>потери</small></div>
     <canvas class="spark"></canvas>
     <div class="srv-actions">
+      <button class="btn icon" data-act="speed" title="Тест скорости">${icon("zap")}</button>
       <label class="switch"><input type="checkbox" data-act="enable"><span></span></label>
       <button class="btn" data-act="pick"></button>
     </div>`;
+  el.querySelector('[data-act="speed"]').addEventListener("click", async (e) => {
+    const b = e.currentTarget;
+    if (b.classList.contains("busy")) return;
+    b.classList.add("busy");
+    toast(`Тест скорости: ${displayName(key)}…`);
+    try {
+      const r = await invoke("speed_test", { key });
+      toast(`${displayName(key)}: ${r.mbps.toFixed(1)} Мбит/с · отклик ${Math.round(r.delay_ms)} мс`, "ok");
+    } catch (err) {
+      toast(`${displayName(key)}: ${ru(err)}`, "error");
+    }
+    b.classList.remove("busy");
+  });
   el.querySelector('[data-act="enable"]').addEventListener("change", async (e) => {
     await call("set_server_enabled", { key, enabled: e.target.checked }, e.target.checked ? `${displayName(key)}: включён` : `${displayName(key)}: отключён`);
     await refreshState();
@@ -318,6 +332,7 @@ function updateRow(el, r, p, pref) {
   const ping = p?.alive ? p.srtt_ms : null;
   const selected = pref === r.key;
   const byFilter = !!r.off && r.off.startsWith("фильтр");
+  el.querySelector('[data-act="speed"]').hidden = r.proto === "openlag" || !!r.off;
   el.className = `srv${selected ? " selected" : ""}${r.off ? " off" : ""}`;
   el.querySelector(".dot").className = `dot ${r.off ? "" : error ? "dead" : p?.alive ? "alive" : ""}`;
   setText(el.querySelector(".n"), r.name);
@@ -545,6 +560,20 @@ function renderSubs() {
   });
 }
 
+$("sub-clip").addEventListener("click", async () => {
+  let text = "";
+  try { text = await navigator.clipboard.readText(); } catch { /* denied */ }
+  if (!text.trim()) return toast("В буфере обмена нет ссылки или ключей", "error");
+  $("sub-input").value = text.trim();
+  $("sub-add").click();
+});
+// "Add to OpenLag" buttons on subscription pages: openlag://import?url=...
+function importLink(text) {
+  document.querySelector('.nav[data-page="subs"]').click();
+  $("sub-input").value = text;
+  toast("Ссылка из браузера: проверьте её и нажмите «Добавить»", "ok");
+}
+window.__TAURI__.event.listen("deep-link", (e) => importLink(e.payload));
 $("sub-file").addEventListener("click", async () => {
   try {
     const text = await call("pick_config_file");
@@ -737,6 +766,8 @@ function renderSettings() {
     $("opt-minimized").checked = s.start_minimized;
     $("opt-tray").checked = s.close_to_tray;
     $("opt-kill").checked = s.kill_switch;
+    $("opt-hotkey").value = s.hotkey;
+    $("opt-boost").checked = s.boost_priority;
     const c = s.conn;
     $("conn-fp").value = c.fingerprint;
     $("conn-frag").checked = c.fragment;
@@ -811,6 +842,22 @@ $("conn-save").addEventListener("click", async () => {
   };
   try { await call("set_conn", { conn }, "Применено: серверы перезапущены"); } catch { /* toast */ }
   await refreshState();
+});
+async function saveExtras() {
+  try {
+    await call("set_extras", { hotkey: $("opt-hotkey").value, boostPriority: $("opt-boost").checked }, "Сохранено");
+  } catch { /* toast */ }
+  await refreshState();
+}
+$("opt-hotkey").addEventListener("change", saveExtras);
+$("opt-boost").addEventListener("change", saveExtras);
+$("backup-export").addEventListener("click", async () => {
+  try { if (await invoke("export_settings")) toast("Резервная копия сохранена", "ok"); } catch (e) { toast(e, "error"); }
+});
+$("backup-import").addEventListener("click", async () => {
+  try {
+    if (await invoke("import_settings")) { toast("Настройки восстановлены", "ok"); await refreshState(); }
+  } catch (e) { toast(e, "error"); }
 });
 $("opt-kill").addEventListener("change", async (e) => {
   try {
@@ -967,6 +1014,8 @@ refreshState().finally(async () => {
   else if (state?.settings.ui.lang) I18N.sync(state.settings.ui.lang);
   else if (state) saveUi({ lang: I18N.lang }).catch(() => {});
   I18N.start();
+  const link = await invoke("take_deep_link").catch(() => null);
+  if (link) importLink(link);
   if (page) document.querySelector(`.nav[data-page="${page.split(":")[0]}"]`)?.click();
   // Development aid: OPENLAG_START_PAGE=term:powershell also opens a shell.
   const shell = page?.split(":")[1];

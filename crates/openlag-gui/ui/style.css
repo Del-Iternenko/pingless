@@ -146,7 +146,7 @@ input[type="search"] { width: 200px; }
 
 .list { display: flex; flex-direction: column; gap: 8px; }
 .srv {
-  display: grid; grid-template-columns: 14px minmax(0, 1fr) 90px 70px 70px 120px 168px; align-items: center; gap: 14px;
+  display: grid; grid-template-columns: 14px minmax(0, 1fr) 90px 70px 70px 120px 212px; align-items: center; gap: 14px;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 16px;
   transition: border-color 150ms;
 }
@@ -332,3 +332,7 @@ main:has(#page-term.active) { padding: 0; overflow: hidden; }
 
 .group-exit { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; font-size: 13px; color: var(--muted); }
 .group-exit select { flex: 1; min-width: 0; }
+
+.btn.icon.busy { pointer-events: none; color: var(--accent); }
+.btn.icon.busy svg { animation: blink 0.7s ease-in-out infinite alternate; }
+@keyframes blink { to { opacity: 0.25; } }

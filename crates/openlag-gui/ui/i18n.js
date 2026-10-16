@@ -154,6 +154,17 @@ const I18N = (() => {
     // tray-like statuses and defaults
     "Игры": "Games", "Мои ключи": "My keys", "Через VPN": "Through VPN", "Не через VPN": "Not through VPN", "Группа": "Group",
     "Белые списки": "Whitelists", "Торренты": "Torrents",
+    // extras
+    "Из буфера": "From clipboard", "В буфере обмена нет ссылки или ключей": "The clipboard has no link or keys",
+    "Ссылка из браузера: проверьте её и нажмите «Добавить»": "Link from the browser: check it and click “Add”",
+    "Тест скорости": "Speed test", "Удобство": "Convenience", "Горячая клавиша вкл/выкл оптимизации": "Hotkey to toggle optimization",
+    "Нет": "None", "Работает и в полноэкранной игре, без переключения в OpenLag.": "Works in a full-screen game too, without switching to OpenLag.",
+    "Высокий приоритет для выбранных программ": "High priority for selected programs",
+    "Пока оптимизация включена, игры из групп получают высокий приоритет процессора, как «буст» в платных игровых VPN. Выключили оптимизацию — приоритет вернётся обычный.":
+      "While optimization is on, the programs in your groups get high CPU priority, like the “boost” of paid game VPNs. Turn optimization off and the priority goes back to normal.",
+    "Резервная копия: подписки, группы, фильтры и SSH-серверы. Пароли SSH расшифруются только на этом ПК.":
+      "Backup: subscriptions, groups, filters and SSH servers. SSH passwords only decrypt on this PC.",
+    "Восстановить…": "Restore…", "Сохранить копию…": "Save backup…", "Резервная копия сохранена": "Backup saved", "Настройки восстановлены": "Settings restored",
   };
   const EN = new Map(Object.entries(EN_RAW).map(([k, v]) => [norm(k), v]));
 
@@ -220,6 +231,8 @@ const I18N = (() => {
     [/^Программы из списка закрыты: туннель выключен$/, "Listed programs closed: tunnel off"],
     [/^Не удалось включить: (.+)$/, "Could not turn on: $1"],
     [/^Сервер подписки ответил ошибкой HTTP (\d+)$/, "The subscription server answered HTTP $1"],
+    [/^Тест скорости: (.+)…$/, "Speed test: $1…"],
+    [/^(.+): ([\d.]+) Мбит\/с · отклик (\d+) мс$/, "$1: $2 Mbit/s · response $3 ms"],
     // Traffic "1.2 ГБ из 50 ГБ"; kept last so longer sentences with "из" match first.
     [/^([\d.,]+ \S+) из ([\d.,]+ \S+)$/, "$1 of $2"],
   ];

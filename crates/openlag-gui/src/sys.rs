@@ -84,13 +84,15 @@ pub fn relaunch_as_admin() -> bool {
     let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
     let verb = wide("runas");
     let file = wide(&exe.to_string_lossy());
+    // The new process waits for this one to exit before claiming the single instance.
+    let params = wide(&format!("--relaunch {}", std::process::id()));
     // SAFETY: NUL-terminated wide strings that outlive the call.
     let r = unsafe {
         ShellExecuteW(
             std::ptr::null_mut(),
             verb.as_ptr(),
             file.as_ptr(),
-            std::ptr::null(),
+            params.as_ptr(),
             std::ptr::null(),
             SW_SHOWNORMAL,
         )
@@ -177,3 +179,114 @@ pub fn open_url(url: &str) {
         );
     }
 }
+
+/// Waits up to `ms` for a process to exit (used after a relaunch as Administrator).
+pub fn wait_for_pid(pid: u32, ms: u32) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
+    // SAFETY: plain handle use; the handle is closed below.
+    unsafe {
+        let h = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if !h.is_null() {
+            WaitForSingleObject(h, ms);
+            CloseHandle(h);
+        }
+    }
+}
+
+/// Registers `openlag://` links for the current user, so "Add to OpenLag" buttons on
+/// subscription pages open this app. Re-done on every start to follow the exe.
+pub fn register_url_scheme() -> anyhow::Result<()> {
+    use std::os::windows::process::CommandExt;
+    let exe = std::env::current_exe()?;
+    let reg = |key: &str, name: Option<&str>, value: &str| {
+        let mut c = std::process::Command::new("reg");
+        c.args(["add", key, "/f", "/t", "REG_SZ", "/d", value]);
+        match name {
+            Some(n) => c.args(["/v", n]),
+            None => c.arg("/ve"),
+        };
+        c.creation_flags(0x0800_0000).output()
+    };
+    const KEY: &str = r"HKCU\Software\Classes\openlag";
+    reg(KEY, None, "URL:OpenLag")?;
+    reg(KEY, Some("URL Protocol"), "")?;
+    reg(
+        &format!(r"{KEY}\DefaultIcon"),
+        None,
+        &format!("{},0", exe.display()),
+    )?;
+    let out = reg(
+        &format!(r"{KEY}\shell\open\command"),
+        None,
+        &format!("\"{}\" \"%1\"", exe.display()),
+    )?;
+    anyhow::ensure!(out.status.success(), "reg add failed");
+    Ok(())
+}
+
+/// Running processes as (pid, lower-case exe name).
+pub fn processes() -> Vec<(u32, String)> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    let mut out = Vec::new();
+    // SAFETY: the snapshot handle is checked and closed; the entry has its size set.
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == INVALID_HANDLE_VALUE {
+            return out;
+        }
+        let mut e: PROCESSENTRY32W = std::mem::zeroed();
+        e.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut ok = Process32FirstW(snap, &mut e) != 0;
+        while ok {
+            let len = e
+                .szExeFile
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(e.szExeFile.len());
+            out.push((
+                e.th32ProcessID,
+                String::from_utf16_lossy(&e.szExeFile[..len]).to_lowercase(),
+            ));
+            ok = Process32NextW(snap, &mut e) != 0;
+        }
+        CloseHandle(snap);
+    }
+    out
+}
+
+/// Sets a process's priority class; returns the previous one (0 on failure).
+pub fn set_priority(pid: u32, class: u32) -> u32 {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        GetPriorityClass, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_INFORMATION,
+        SetPriorityClass,
+    };
+    // SAFETY: plain handle use; the handle is closed below.
+    unsafe {
+        let h = OpenProcess(
+            PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION,
+            0,
+            pid,
+        );
+        if h.is_null() {
+            return 0;
+        }
+        let old = GetPriorityClass(h);
+        if old != 0 && old != class && SetPriorityClass(h, class) == 0 {
+            CloseHandle(h);
+            return 0;
+        }
+        CloseHandle(h);
+        old
+    }
+}
+
+pub const NORMAL_PRIORITY: u32 = 0x20;
+pub const HIGH_PRIORITY: u32 = 0x80;

@@ -45,6 +45,10 @@ pub struct Settings {
     /// Look for new releases on GitHub.
     pub auto_update: bool,
     pub ui: UiPrefs,
+    /// Global hotkey that toggles optimization, e.g. "Ctrl+Alt+O"; empty = none.
+    pub hotkey: String,
+    /// Raise the priority of the selected programs while optimization is on.
+    pub boost_priority: bool,
     /// How xray connects to the VPN servers.
     pub conn: ConnPrefs,
     /// Saved SSH servers for the terminal tab.
@@ -83,6 +87,8 @@ impl Default for Settings {
             kill_switch: false,
             auto_update: true,
             ui: UiPrefs::default(),
+            hotkey: "Ctrl+Alt+O".into(),
+            boost_priority: false,
             conn: ConnPrefs::default(),
             ssh_hosts: Vec::new(),
             games: Vec::new(),

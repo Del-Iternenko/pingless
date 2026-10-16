@@ -148,6 +148,7 @@
         <textarea id="sub-input" rows="3" placeholder="https://… (Happ, Incy, Marzban, Remnawave)&#10;vless://…  vmess://…  trojan://…  ss://…&#10;vpn://… (Amnezia: Xray или WireGuard)&#10;wireguard://…  или текст .conf WireGuard"></textarea>
         <div class="row space">
           <span class="hint">Ссылку на подписку даёт VPN-сервис: в личном кабинете или в Telegram-боте, обычно кнопка «Подключить» или «Скопировать ссылку».</span>
+          <button class="btn" id="sub-clip">Из буфера</button>
           <button class="btn" id="sub-file">Из файла…</button>
           <button class="btn primary" id="sub-add"><svg class="ic"><use href="#i-plus"/></svg>Добавить</button>
         </div>
@@ -342,6 +343,21 @@
           <select id="opt-probe"><option value="100">10 раз в секунду</option><option value="250">4 раза в секунду</option><option value="500">2 раза в секунду</option><option value="1000">раз в секунду</option></select>
         </label>
         <div class="row end"><button class="btn primary" id="startup-save">Сохранить</button></div>
+      </div>
+      <div class="card form">
+        <div class="card-head"><h3>Удобство</h3></div>
+        <label class="field">
+          <span>Горячая клавиша вкл/выкл оптимизации</span>
+          <select id="opt-hotkey">
+            <option value="">Нет</option><option value="Ctrl+Alt+O">Ctrl + Alt + O</option><option value="Ctrl+Shift+O">Ctrl + Shift + O</option><option value="Ctrl+Alt+F12">Ctrl + Alt + F12</option><option value="Alt+F10">Alt + F10</option>
+          </select>
+          <small>Работает и в полноэкранной игре, без переключения в OpenLag.</small>
+        </label>
+        <label class="field check">
+          <input type="checkbox" id="opt-boost">
+          <span>Высокий приоритет для выбранных программ<small>Пока оптимизация включена, игры из групп получают высокий приоритет процессора, как «буст» в платных игровых VPN. Выключили оптимизацию — приоритет вернётся обычный.</small></span>
+        </label>
+        <div class="row"><span class="hint">Резервная копия: подписки, группы, фильтры и SSH-серверы. Пароли SSH расшифруются только на этом ПК.</span><span style="flex:1"></span><button class="btn" id="backup-import">Восстановить…</button><button class="btn" id="backup-export">Сохранить копию…</button></div>
       </div>
       <div class="card form">
         <div class="card-head"><h3>Свои relay-серверы</h3></div>

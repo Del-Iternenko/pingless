@@ -7,6 +7,7 @@ mod geo;
 mod relay;
 mod secret;
 mod settings;
+mod speed;
 mod sys;
 mod term;
 mod tray;
@@ -57,6 +58,8 @@ struct Net {
     /// The user switched capture off while a listed program ran; auto-connect waits
     /// until those programs exit before acting again.
     suppress_auto: bool,
+    /// Local SOCKS port of each subscription server, by key.
+    socks: HashMap<String, std::net::SocketAddr>,
 }
 
 type Shared<'a> = State<'a, Arc<AppState>>;
@@ -278,6 +281,7 @@ impl AppState {
             .map(|p| (p.name.clone(), p.socks))
             .collect();
         net.engine = Some(Arc::new(Engine::start(cfg, downstream).await?));
+        net.socks = probe.iter().cloned().collect();
         self.spawn_geo_probe(probe, false);
         Ok(())
     }
@@ -914,8 +918,29 @@ async fn relaunch_admin(app: tauri::AppHandle, st: Shared<'_>) -> CmdResult<()> 
 
 fn main() {
     init_log();
+    let args: Vec<String> = std::env::args().collect();
+    // After "restart as administrator" the old instance is still exiting.
+    if let Some(pid) = args
+        .iter()
+        .position(|a| a == "--relaunch")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|p| p.parse().ok())
+    {
+        sys::wait_for_pid(pid, 10_000);
+    }
+    if let Some(link) = args.iter().find_map(|a| deep_link(a)) {
+        *PENDING_LINK.lock() = Some(link);
+    }
 
     tauri::Builder::default()
+        // A second launch (or an openlag:// link) brings up the running one.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            tray::show_window(app);
+            if let Some(link) = argv.iter().find_map(|a| deep_link(a)) {
+                let _ = app.emit("deep-link", link);
+            }
+        }))
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
@@ -941,6 +966,13 @@ fn main() {
             if let Err(e) = tray::create(app.handle()) {
                 warn!("tray icon: {e}");
             }
+            if let Err(e) = sys::register_url_scheme() {
+                warn!("openlag:// links: {e:#}");
+            }
+            let hotkey = state.settings.lock().hotkey.clone();
+            if let Err(e) = apply_hotkey(app.handle(), &hotkey) {
+                warn!("hotkey {hotkey}: {e:#}");
+            }
             // The window starts hidden; the UI calls `ui_ready` after its first render.
             // Fallback in case the page never gets there.
             let fallback = app.handle().clone();
@@ -956,6 +988,7 @@ fn main() {
                 tauri::async_runtime::spawn(compare_loop(state.clone()));
                 tauri::async_runtime::spawn(auto_connect(state.clone(), handle.clone()));
                 tauri::async_runtime::spawn(auto_update_check(state.clone(), handle.clone()));
+                tauri::async_runtime::spawn(boost_loop(state.clone()));
                 loop {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     // Skip a tick while a rebuild holds the lock.
@@ -1049,6 +1082,11 @@ fn main() {
             open_url,
             set_kill_switch,
             set_conn,
+            take_deep_link,
+            set_extras,
+            speed_test,
+            export_settings,
+            import_settings,
             relay_deploy,
             relay_remove,
             start_page,
@@ -1652,4 +1690,264 @@ fn relay_remove(
         state.terminals.finish_task(&app, id, reason);
     });
     Ok(id)
+}
+
+// ---------------------------------------------------------------------------
+// openlag:// links, hotkey, priority boost, speed test, backup
+
+static PENDING_LINK: parking_lot::Mutex<Option<String>> = parking_lot::Mutex::new(None);
+
+/// What to import from an `openlag://` link: `openlag://import?url=<encoded>`,
+/// `openlag://import/<link>` or `openlag://<link>` (a subscription URL or keys).
+fn deep_link(arg: &str) -> Option<String> {
+    let rest = arg.trim().strip_prefix("openlag://")?;
+    let rest = rest.trim_end_matches('/');
+    let payload = if let Some(q) = rest
+        .strip_prefix("import?")
+        .or_else(|| rest.strip_prefix("install-config?"))
+        .or_else(|| rest.strip_prefix("add?"))
+    {
+        q.split('&')
+            .find_map(|kv| kv.strip_prefix("url="))
+            .map(percent_decode)?
+    } else if let Some(r) = rest
+        .strip_prefix("import/")
+        .or_else(|| rest.strip_prefix("add/"))
+    {
+        percent_decode(r)
+    } else {
+        percent_decode(rest)
+    };
+    let payload = payload.trim().to_string();
+    (payload.contains("://") && payload.len() < 64 * 1024).then_some(payload)
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let Ok(v) =
+                u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or(""), 16)
+        {
+            out.push(v);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[tauri::command]
+fn take_deep_link() -> Option<String> {
+    PENDING_LINK.lock().take()
+}
+
+fn apply_hotkey(app: &tauri::AppHandle, hotkey: &str) -> Result<()> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+    let gs = app.global_shortcut();
+    gs.unregister_all()?;
+    if hotkey.trim().is_empty() {
+        return Ok(());
+    }
+    gs.on_shortcut(hotkey.trim(), |app, _shortcut, event| {
+        if event.state != ShortcutState::Pressed {
+            return;
+        }
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let st = app.state::<Arc<AppState>>().inner().clone();
+            match st.toggle_capture().await {
+                Ok(()) => {
+                    let on = st.net.lock().await.capture.is_some();
+                    let msg = if on {
+                        tr!("Оптимизация включена", "Optimization on")
+                    } else {
+                        tr!("Оптимизация выключена", "Optimization off")
+                    };
+                    let _ = app.emit("auto", msg);
+                }
+                Err(e) => {
+                    let _ = app.emit(
+                        "notify",
+                        tr!("Не удалось включить: {e:#}", "Could not turn on: {e:#}"),
+                    );
+                }
+            }
+        });
+    })?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_extras(
+    app: tauri::AppHandle,
+    st: Shared<'_>,
+    hotkey: String,
+    boost_priority: bool,
+) -> CmdResult<()> {
+    let old = st.settings.lock().hotkey.clone();
+    if let Err(e) = apply_hotkey(&app, &hotkey) {
+        let _ = apply_hotkey(&app, &old);
+        return Err(tr!(
+            "Не удалось занять {hotkey}: {e:#}. Возможно, сочетание занято другой программой",
+            "Cannot take {hotkey}: {e:#}. Another program may be using it"
+        ));
+    }
+    {
+        let mut s = st.settings.lock();
+        s.hotkey = hotkey;
+        s.boost_priority = boost_priority;
+    }
+    st.save().map_err(err)
+}
+
+/// While optimization is on, keeps the selected programs at high priority (like the
+/// "boost" of commercial game VPNs); puts them back to normal when it goes off.
+async fn boost_loop(st: Arc<AppState>) {
+    let mut boosted: HashMap<u32, String> = HashMap::new();
+    loop {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let capturing = st.net.lock().await.capture.is_some();
+        let names: std::collections::HashSet<String> = {
+            let s = st.settings.lock();
+            if capturing && s.boost_priority && !s.all_except() {
+                s.groups
+                    .iter()
+                    .filter(|g| g.enabled)
+                    .flat_map(|g| g.processes.iter().cloned())
+                    .collect()
+            } else {
+                Default::default()
+            }
+        };
+        let procs = sys::processes();
+        // Restore what no longer qualifies (still running under the same name).
+        boosted.retain(|pid, name| {
+            if names.contains(name) {
+                return true;
+            }
+            if procs.iter().any(|(p, n)| p == pid && n == name) {
+                sys::set_priority(*pid, sys::NORMAL_PRIORITY);
+            }
+            false
+        });
+        for (pid, name) in procs {
+            if !names.contains(&name) || boosted.contains_key(&pid) {
+                continue;
+            }
+            match sys::set_priority(pid, sys::HIGH_PRIORITY) {
+                sys::NORMAL_PRIORITY => {
+                    info!("priority boost: {name} ({pid})");
+                    boosted.insert(pid, name);
+                }
+                0 | sys::HIGH_PRIORITY => {}
+                // The user set something else on purpose: leave it as it was.
+                other => {
+                    sys::set_priority(pid, other);
+                    boosted.insert(pid, name);
+                }
+            }
+        }
+    }
+}
+
+#[tauri::command]
+async fn speed_test(st: Shared<'_>, key: String) -> CmdResult<speed::Speed> {
+    let socks = st
+        .net
+        .lock()
+        .await
+        .socks
+        .get(&key)
+        .copied()
+        .ok_or_else(|| tr!("сервер не запущен", "the server is not running"))?;
+    speed::run(socks).await.map_err(err)
+}
+
+/// Saves settings (subscriptions, groups, filters, SSH servers) to a file. Saved
+/// passwords only decrypt on this PC under this Windows account.
+#[tauri::command]
+async fn export_settings(app: tauri::AppHandle, st: Shared<'_>) -> CmdResult<bool> {
+    use tauri_plugin_dialog::DialogExt;
+    let json = serde_json::to_vec_pretty(&*st.settings.lock()).map_err(|e| e.to_string())?;
+    let file = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title(tr!("Сохранить резервную копию", "Save a backup"))
+            .set_file_name("openlag-settings.json")
+            .add_filter("JSON", &["json"])
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(path) = file.and_then(|f| f.into_path().ok()) else {
+        return Ok(false);
+    };
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn import_settings(app: tauri::AppHandle, st: Shared<'_>) -> CmdResult<bool> {
+    use tauri_plugin_dialog::DialogExt;
+    let file = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title(tr!(
+                "Восстановить из резервной копии",
+                "Restore from a backup"
+            ))
+            .add_filter("JSON", &["json"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(path) = file.and_then(|f| f.into_path().ok()) else {
+        return Ok(false);
+    };
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let mut new: Settings = serde_json::from_slice(&bytes).map_err(|e| {
+        tr!(
+            "это не резервная копия OpenLag: {e}",
+            "not an OpenLag backup: {e}"
+        )
+    })?;
+    {
+        let mut s = st.settings.lock();
+        // Keep this device's id: subscription panels count devices by it.
+        new.hwid = s.hwid.clone();
+        *s = new;
+    }
+    st.save().map_err(err)?;
+    st.rebuild().await;
+    Ok(true)
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::deep_link;
+
+    #[test]
+    fn deep_links() {
+        assert_eq!(
+            deep_link("openlag://import?url=https%3A%2F%2Fsub.example.com%2Fabc%3Fx%3D1")
+                .as_deref(),
+            Some("https://sub.example.com/abc?x=1")
+        );
+        assert_eq!(
+            deep_link("openlag://import/vless://u@h:443?type=tcp#n").as_deref(),
+            Some("vless://u@h:443?type=tcp#n")
+        );
+        assert_eq!(
+            deep_link("openlag://https://a.b/c/").as_deref(),
+            Some("https://a.b/c")
+        );
+        assert_eq!(deep_link("openlag://nonsense"), None);
+        assert_eq!(deep_link("--minimized"), None);
+    }
 }
