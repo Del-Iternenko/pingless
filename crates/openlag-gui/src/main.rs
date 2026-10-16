@@ -769,11 +769,13 @@ fn main() {
             if let Err(e) = tray::create(app.handle()) {
                 warn!("tray icon: {e}");
             }
-            let minimized = state.settings.lock().start_minimized
-                || std::env::args().any(|a| a == "--minimized");
-            if minimized && let Some(w) = app.get_webview_window("main") {
-                let _ = w.minimize();
-            }
+            // The window starts hidden; the UI calls `ui_ready` after its first render.
+            // Fallback in case the page never gets there.
+            let fallback = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(6)).await;
+                show_on_start(&fallback);
+            });
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -855,6 +857,7 @@ fn main() {
             relaunch_admin,
             check_update,
             install_update,
+            ui_ready,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build OpenLag")
@@ -1030,4 +1033,24 @@ async fn auto_update_check(st: Arc<AppState>, handle: tauri::AppHandle) {
         }
         tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
     }
+}
+
+static SHOWN_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Shows the main window the first time, unless OpenLag was started minimized (then it
+/// stays in the tray).
+fn show_on_start(app: &tauri::AppHandle) {
+    if SHOWN_ONCE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let minimized = app.state::<Arc<AppState>>().settings.lock().start_minimized
+        || std::env::args().any(|a| a == "--minimized");
+    if !minimized {
+        tray::show_window(app);
+    }
+}
+
+#[tauri::command]
+fn ui_ready(app: tauri::AppHandle) {
+    show_on_start(&app);
 }

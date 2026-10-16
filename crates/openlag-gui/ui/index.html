@@ -29,6 +29,14 @@
     </defs>
   </svg>
 
+  <header class="titlebar" id="titlebar" data-tauri-drag-region>
+    <span class="tb-title" data-tauri-drag-region>OpenLag</span>
+    <span class="tb-grow" data-tauri-drag-region></span>
+    <button class="tb" id="tb-min" aria-label="Свернуть"><svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg></button>
+    <button class="tb" id="tb-max" aria-label="Развернуть"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg></button>
+    <button class="tb close" id="tb-close" aria-label="Закрыть"><svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7 7 17"/></svg></button>
+  </header>
+
   <aside class="sidebar">
     <div class="brand">
       <img src="logo.png" alt="" width="32" height="32">
@@ -114,6 +122,7 @@
         </div>
         <div class="presets" id="filter-presets"></div>
       </div>
+      <div id="server-empty" class="card empty" hidden>Серверов нет. Добавьте подписку на вкладке «Подписки».</div>
       <div id="server-list" class="list"></div>
     </section>
 
@@ -278,6 +287,7 @@
   </main>
 
   <div id="toasts" aria-live="polite"></div>
+  <script src="native.js"></script>
   <script src="chart.js"></script>
   <script src="fun.js"></script>
   <script src="app.js"></script>

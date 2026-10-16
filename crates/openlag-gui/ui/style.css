@@ -21,7 +21,9 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body {
-  display: flex;
+  display: grid;
+  grid-template-columns: 216px minmax(0, 1fr);
+  grid-template-rows: 34px minmax(0, 1fr);
   background: var(--bg);
   color: var(--text);
   font: 14px/1.5 var(--font);
@@ -260,3 +262,16 @@ body.compact .srv { padding: 8px 12px; }
 body.compact .hero { padding: 16px 20px; }
 body.compact .power { width: 88px; height: 88px; }
 body.compact .kpi-big { font-size: 44px; }
+
+/* Custom title bar (the window has no native frame) */
+.titlebar { grid-column: 1 / -1; display: flex; align-items: center; height: 34px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.tb-title { padding-left: 14px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; color: var(--muted); }
+.tb-grow { flex: 1; align-self: stretch; }
+.tb { width: 46px; height: 34px; border: 0; background: transparent; color: var(--muted); display: grid; place-items: center; transition: background 120ms, color 120ms; }
+.tb svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.tb:hover { background: rgba(255, 255, 255, 0.07); color: var(--text); }
+.tb.close:hover { background: #e11d48; color: #fff; }
+.sidebar { width: auto; min-height: 0; overflow-y: auto; }
+main { min-height: 0; }
+img, svg, canvas { -webkit-user-drag: none; }
+* { -webkit-tap-highlight-color: transparent; }

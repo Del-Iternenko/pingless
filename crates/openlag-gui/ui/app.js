@@ -200,16 +200,17 @@ function renderHome() {
   for (const [k] of others) keys.push(k);
   const series = keys.map((k, i) => ({ key: k, color: i ? COLORS[i] : accentColor(), values: (history.get(k) ?? []).map((h) => h.rtt) }));
   $("chart-title").textContent = key ? `· ${displayName(key)}` : "";
-  $("legend").innerHTML = series.map((s) => `<span><i style="background:${s.color}"></i>${esc(displayName(s.key))}</span>`).join("");
-  Chart.line($("chart-ping"), series, { points: HISTORY, minMax: 20 });
-  Chart.line($("chart-loss"), key ? [{ color: "#ef4444", values: (history.get(key) ?? []).map((h) => h.loss) }] : [], { points: HISTORY, minMax: 5 });
+  const legend = series.map((s) => `<span><i style="background:${s.color}"></i>${esc(displayName(s.key))}</span>`).join("");
+  if ($("legend").innerHTML !== legend) $("legend").innerHTML = legend;
+  chartSeries = { key, series };
 
   const rows = [
     ...flows.sort((a, b) => a.id - b.id).map((f) => `<tr><td><span class="proto udp">UDP</span></td><td class="mono">${esc(f.remote)}</td><td>${esc(f.exit ? displayName(f.exit) : "напрямую")}</td><td class="num">${f.packets_up} пак.</td><td class="num">${f.packets_down} пак.${f.duplicates ? ` <span class="muted">(+${f.duplicates} дубл.)</span>` : ""}</td></tr>`),
     ...tcp.slice(0, 30).map((t) => `<tr><td><span class="proto tcp">TCP</span></td><td class="mono">${esc(t.remote)}</td><td>${esc(displayName(t.exit))}</td><td class="num">${fmtBytes(t.bytes_up)}</td><td class="num">${fmtBytes(t.bytes_down)}</td></tr>`),
   ];
   $("flows-count").textContent = tcp.length > 30 ? `показано 30 из ${tcp.length} TCP` : "";
-  $("flows").innerHTML = rows.length ? rows.join("") : `<tr><td colspan="5" class="empty">Пока нет. Включите оптимизацию и запустите программу.</td></tr>`;
+  const html = rows.length ? rows.join("") : `<tr><td colspan="5" class="empty">Пока нет. Включите оптимизацию и запустите программу.</td></tr>`;
+  if ($("flows").innerHTML !== html) $("flows").innerHTML = html;
 }
 
 $("power").addEventListener("click", async () => {
@@ -225,6 +226,75 @@ $("power").addEventListener("click", async () => {
 });
 
 // ---------------------------------------------------------------- servers
+
+// Rows are created once per server and updated in place: rebuilding 50 rows with
+// canvases every second made the page stutter and swallowed clicks.
+const rowEls = new Map();
+
+function serverRow(key) {
+  const el = document.createElement("div");
+  el.className = "srv";
+  el.dataset.key = key;
+  el.innerHTML = `
+    <div class="dot"></div>
+    <div style="min-width:0"><div class="name"><span class="n"></span><span class="badge"></span></div><div class="sub"></div></div>
+    <div class="metric m-ping"><span></span><small>пинг</small></div>
+    <div class="metric m-jit"><span></span><small>джиттер</small></div>
+    <div class="metric m-loss"><span></span><small>потери</small></div>
+    <canvas class="spark"></canvas>
+    <div class="srv-actions">
+      <label class="switch"><input type="checkbox" data-act="enable"><span></span></label>
+      <button class="btn" data-act="pick"></button>
+    </div>`;
+  el.querySelector('[data-act="enable"]').addEventListener("change", async (e) => {
+    await call("set_server_enabled", { key, enabled: e.target.checked }, e.target.checked ? `${displayName(key)}: включён` : `${displayName(key)}: отключён`);
+    await refreshState();
+  });
+  el.querySelector('[data-act="pick"]').addEventListener("click", async () => {
+    const next = state.settings.preferred_exit === key ? null : key;
+    await call("set_preferred", { key: next }, next ? `Новые соединения пойдут через ${displayName(key)}` : "Автовыбор сервера");
+    await refreshState();
+  });
+  return el;
+}
+
+function setText(el, text) {
+  if (el.textContent !== text) el.textContent = text;
+}
+
+function updateRow(el, r, p, pref) {
+  const error = r.off ? null : state.server_errors[r.key];
+  const ping = p?.alive ? p.srtt_ms : null;
+  const selected = pref === r.key;
+  const byFilter = !!r.off && r.off.startsWith("фильтр");
+  el.className = `srv${selected ? " selected" : ""}${r.off ? " off" : ""}`;
+  el.querySelector(".dot").className = `dot ${r.off ? "" : error ? "dead" : p?.alive ? "alive" : ""}`;
+  setText(el.querySelector(".n"), r.name);
+  setText(el.querySelector(".badge"), r.proto);
+  const sub = el.querySelector(".sub");
+  setText(sub, r.off ? `Отключён · ${r.off}` : error ? error : r.sub);
+  sub.className = `sub${error ? " err-text" : ""}`;
+  const mp = el.querySelector(".m-ping");
+  mp.className = `metric m-ping ${pingClass(ping)}`;
+  setText(mp.firstElementChild, r.off ? "—" : ping == null ? (error ? "ошибка" : p ? "нет ответа" : "…") : `${fmtMs(ping)} мс`);
+  setText(el.querySelector(".m-jit span"), p?.alive ? p.jitter_ms.toFixed(1) : "—");
+  setText(el.querySelector(".m-loss span"), p ? p.loss_pct.toFixed(0) + "%" : "—");
+  const sw = el.querySelector(".switch");
+  sw.hidden = r.proto === "openlag";
+  sw.title = byFilter ? "Отключён фильтром: уберите слово в фильтрах выше" : "Включить / отключить сервер";
+  const cb = sw.querySelector("input");
+  cb.checked = !r.off;
+  cb.disabled = byFilter;
+  const btn = el.querySelector('[data-act="pick"]');
+  btn.className = `btn${selected ? " on" : ""}`;
+  btn.disabled = !!error || !!r.off;
+  const label = selected ? `${icon("check")}Выбран` : "Выбрать";
+  if (btn.dataset.label !== label) {
+    btn.innerHTML = label;
+    btn.dataset.label = label;
+  }
+  Chart.spark(el.querySelector("canvas"), (history.get(r.key) ?? []).slice(-40).map((h) => h.rtt), accentColor());
+}
 
 function renderServers() {
   const filter = $("server-filter").value.trim().toLowerCase();
@@ -242,47 +312,16 @@ function renderServers() {
     const va = pa?.alive ? pa.srtt_ms : 1e9, vb = pb?.alive ? pb.srtt_ms : 1e9;
     return va - vb;
   });
-  if (!rows.length) {
-    $("server-list").innerHTML = `<div class="card empty">Серверов нет. Добавьте подписку на вкладке «Подписки».</div>`;
-    return;
-  }
-  $("server-list").innerHTML = rows
-    .map((r) => {
-      const p = r.off ? null : ex.get(r.key);
-      const error = r.off ? null : state.server_errors[r.key];
-      const status = r.off ? "" : error ? "dead" : p?.alive ? "alive" : "";
-      const ping = p?.alive ? p.srtt_ms : null;
-      const selected = pref === r.key;
-      const byFilter = r.off && r.off.startsWith("фильтр");
-      const isRelay = r.proto === "openlag";
-      const sub = r.off ? `<span class="muted">Отключён · ${esc(r.off)}</span>` : error ? `<span class="err-text">${esc(error)}</span>` : esc(r.sub);
-      return `<div class="srv ${selected ? "selected" : ""} ${r.off ? "off" : ""}" data-key="${esc(r.key)}">
-        <div class="dot ${status}"></div>
-        <div style="min-width:0"><div class="name">${esc(r.name)}<span class="badge">${esc(r.proto)}</span></div>
-          <div class="sub">${sub}</div></div>
-        <div class="metric ${pingClass(ping)}">${r.off ? "—" : ping == null ? (error ? "ошибка" : p ? "нет ответа" : "…") : `${fmtMs(ping)} мс`}<small>пинг</small></div>
-        <div class="metric">${p?.alive ? p.jitter_ms.toFixed(1) : "—"}<small>джиттер</small></div>
-        <div class="metric">${p ? p.loss_pct.toFixed(0) + "%" : "—"}<small>потери</small></div>
-        <canvas class="spark"></canvas>
-        <div class="srv-actions">
-          ${isRelay ? "" : `<label class="switch" title="${byFilter ? "Отключён фильтром: уберите слово в фильтрах выше" : "Включить / отключить сервер"}"><input type="checkbox" data-act="enable" ${r.off ? "" : "checked"} ${byFilter ? "disabled" : ""}><span></span></label>`}
-          <button class="btn ${selected ? "on" : ""}" data-act="pick" ${error || r.off ? "disabled" : ""}>${selected ? icon("check") + "Выбран" : "Выбрать"}</button>
-        </div>
-      </div>`;
-    })
-    .join("");
-  $("server-list").querySelectorAll(".srv").forEach((el) => {
-    const key = el.dataset.key;
-    Chart.spark(el.querySelector("canvas"), (history.get(key) ?? []).slice(-40).map((h) => h.rtt), accentColor());
-    el.querySelector('[data-act="enable"]')?.addEventListener("change", async (e) => {
-      await call("set_server_enabled", { key, enabled: e.target.checked }, e.target.checked ? `${displayName(key)}: включён` : `${displayName(key)}: отключён`);
-      await refreshState();
-    });
-    el.querySelector('[data-act="pick"]').addEventListener("click", async () => {
-      const next = state.settings.preferred_exit === key ? null : key;
-      await call("set_preferred", { key: next }, next ? `Новые соединения пойдут через ${displayName(key)}` : "Автовыбор сервера");
-      await refreshState();
-    });
+  const list = $("server-list");
+  $("server-empty").hidden = rows.length > 0;
+  const keep = new Set(rows.map((r) => r.key));
+  for (const [k, el] of rowEls) if (!keep.has(k)) { el.remove(); rowEls.delete(k); }
+  rows.forEach((r, i) => {
+    let el = rowEls.get(r.key);
+    if (!el) rowEls.set(r.key, (el = serverRow(r.key)));
+    updateRow(el, r, r.off ? null : ex.get(r.key), pref);
+    // Reorder by moving nodes only where the order changed.
+    if (list.children[i] !== el) list.insertBefore(el, list.children[i] ?? null);
   });
 }
 
@@ -651,14 +690,41 @@ listen("tick", (e) => {
     if (h.length > HISTORY_MAX) h.shift();
     history.set(k, h);
   }
+  lastTickAt = performance.now();
   const page = document.querySelector(".page.active").id;
   if (page === "page-home") renderHome();
-  // Don't rebuild the list under the cursor: clicks would land on replaced nodes.
-  if (page === "page-servers" && !$("server-list").matches(":hover")) renderServers();
+  if (page === "page-servers") renderServers();
 });
+
+// ---------------------------------------------------------------- live charts
+
+let chartSeries = null;
+let lastTickAt = performance.now();
+let lastFrame = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  // ~40 fps is plenty for a chart and keeps the CPU cool.
+  if (now - lastFrame < 24 || document.hidden || !$("page-home").classList.contains("active") || !chartSeries) return;
+  lastFrame = now;
+  const phase = Math.min(1, (now - lastTickAt) / 1000);
+  const { key, series } = chartSeries;
+  Chart.line($("chart-ping"), series, { points: HISTORY, minMax: 20, phase });
+  Chart.line($("chart-loss"), key ? [{ color: "#ef4444", values: (history.get(key) ?? []).map((h) => h.loss) }] : [], { points: HISTORY, minMax: 5, phase, smoothing: false });
+}
+requestAnimationFrame(frame);
+
+// ---------------------------------------------------------------- window
+
+const appWindow = window.__TAURI__.window.getCurrentWindow();
+$("tb-min").addEventListener("click", () => appWindow.minimize());
+$("tb-max").addEventListener("click", () => appWindow.toggleMaximize());
+$("tb-close").addEventListener("click", () => appWindow.close());
+$("titlebar").addEventListener("dblclick", (e) => { if (!e.target.closest("button")) appWindow.toggleMaximize(); });
 
 window.addEventListener("resize", renderAll);
 Fun.init();
-refreshState();
+// The window is created hidden and shown after the first render: no white flash and
+// no half-drawn page, like a native app.
+refreshState().finally(() => invoke("ui_ready"));
 // Pick up background changes (auto-refresh, xray restarts).
 setInterval(refreshState, 15000);
