@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OpenLag</title>
+  <title>Pingless</title>
   <link rel="stylesheet" href="vendor/xterm/xterm.css">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -33,7 +33,7 @@
   </svg>
 
   <header class="titlebar" id="titlebar" data-tauri-drag-region>
-    <span class="tb-title" data-tauri-drag-region>OpenLag</span>
+    <span class="tb-title" data-tauri-drag-region>Pingless</span>
     <span class="tb-grow" data-tauri-drag-region></span>
     <button class="tb" id="tb-min" aria-label="Свернуть"><svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg></button>
     <button class="tb" id="tb-max" aria-label="Развернуть"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg></button>
@@ -43,7 +43,7 @@
   <aside class="sidebar">
     <div class="brand">
       <img src="logo.png" alt="" width="32" height="32">
-      <span>OpenLag</span>
+      <span>Pingless</span>
     </div>
     <nav>
       <button class="nav active" data-page="home"><svg class="ic"><use href="#i-home"/></svg>Главная</button>
@@ -124,7 +124,7 @@
       <div class="kpis" data-widget="kpis">
         <div class="card kpi"><div class="label">Джиттер</div><div class="kpi-val" id="kpi-jitter">—</div></div>
         <div class="card kpi"><div class="label">Потери</div><div class="kpi-val" id="kpi-loss">—</div></div>
-        <div class="card kpi" title="Пинг до тех же серверов игры: напрямую с вашей сетевой карты и через OpenLag (по ответам самой игры)"><div class="label">Без OpenLag → с OpenLag</div><div class="kpi-val" id="kpi-compare">—</div><div class="kpi-sub" id="kpi-compare-sub">появится, когда игра начнёт пинговать свои серверы</div></div>
+        <div class="card kpi" title="Пинг до тех же серверов игры: напрямую с вашей сетевой карты и через Pingless (по ответам самой игры)"><div class="label">Без Pingless → с Pingless</div><div class="kpi-val" id="kpi-compare">—</div><div class="kpi-sub" id="kpi-compare-sub">появится, когда игра начнёт пинговать свои серверы</div></div>
         <div class="card kpi"><div class="label">Соединений</div><div class="kpi-val" id="kpi-flows">0</div></div>
       </div>
 
@@ -143,7 +143,7 @@
       <div class="card" data-widget="flows">
         <div class="card-head"><h3>Соединения</h3><span class="muted" id="flows-count"></span></div>
         <table class="table">
-          <thead><tr><th>Тип</th><th>Куда</th><th>Через</th><th class="num" title="ICMP напрямую с сетевой карты, в обход любых туннелей">Без OpenLag</th><th class="num" title="Время ответа сервера на пакеты самой игры через туннель">С OpenLag</th><th class="num">Трафик</th></tr></thead>
+          <thead><tr><th>Тип</th><th>Куда</th><th>Через</th><th class="num" title="ICMP напрямую с сетевой карты, в обход любых туннелей">Без Pingless</th><th class="num" title="Время ответа сервера на пакеты самой игры через туннель">С Pingless</th><th class="num">Трафик</th></tr></thead>
           <tbody id="flows"><tr><td colspan="6" class="empty">Пока нет. Включите оптимизацию и запустите программу.</td></tr></tbody>
         </table>
       </div>
@@ -291,7 +291,7 @@
         </label>
         <label class="field check">
           <input type="checkbox" id="opt-existing">
-          <span>Переводить в туннель уже открытые соединения<small>Обычно выкидывает из идущего матча. Лучше включать OpenLag до запуска игры.</small></span>
+          <span>Переводить в туннель уже открытые соединения<small>Обычно выкидывает из идущего матча. Лучше включать Pingless до запуска игры.</small></span>
         </label>
         <label class="field check">
           <input type="checkbox" id="opt-kill">
@@ -334,7 +334,7 @@
         <label class="field">
           <span>DNS для адресов серверов</span>
           <select id="conn-dns"><option value="">Системный</option><option value="https://1.1.1.1/dns-query">Cloudflare DoH</option><option value="https://8.8.8.8/dns-query">Google DoH</option><option value="https://9.9.9.9/dns-query">Quad9 DoH</option><option value="https://77.88.8.8/dns-query">Яндекс DoH</option></select>
-          <small>Через что OpenLag узнаёт IP серверов из подписки. DoH прячет запросы от провайдера.</small>
+          <small>Через что Pingless узнаёт IP серверов из подписки. DoH прячет запросы от провайдера.</small>
         </label>
         <label class="field">
           <span>Цель замера пинга через серверы</span>
@@ -392,11 +392,11 @@
         </label>
         <label class="field check">
           <input type="checkbox" id="opt-tray">
-          <span>Крестик сворачивает в трей<small>OpenLag продолжит работать: иконка у часов, левый клик открывает окно, правый даёт меню с переключателем и выбором сервера. «Выход» в меню трея закрывает программу совсем.</small></span>
+          <span>Крестик сворачивает в трей<small>Pingless продолжит работать: иконка у часов, левый клик открывает окно, правый даёт меню с переключателем и выбором сервера. «Выход» в меню трея закрывает программу совсем.</small></span>
         </label>
         <label class="field check">
           <input type="checkbox" id="opt-update">
-          <span>Проверять обновления<small>Раз в 6 часов OpenLag смотрит последний релиз на GitHub. Обновление ставится только по вашей кнопке.</small></span>
+          <span>Проверять обновления<small>Раз в 6 часов Pingless смотрит последний релиз на GitHub. Обновление ставится только по вашей кнопке.</small></span>
         </label>
         <div class="row"><span class="hint" id="ver-info"></span><span style="flex:1"></span><button class="btn" id="check-update">Проверить сейчас</button></div>
         <label class="field">
@@ -412,7 +412,7 @@
           <select id="opt-hotkey">
             <option value="">Нет</option><option value="Ctrl+Alt+O">Ctrl + Alt + O</option><option value="Ctrl+Shift+O">Ctrl + Shift + O</option><option value="Ctrl+Alt+F12">Ctrl + Alt + F12</option><option value="Alt+F10">Alt + F10</option>
           </select>
-          <small>Работает и в полноэкранной игре, без переключения в OpenLag.</small>
+          <small>Работает и в полноэкранной игре, без переключения в Pingless.</small>
         </label>
         <label class="field check">
           <input type="checkbox" id="opt-boost">
@@ -422,10 +422,10 @@
       </div>
       <div class="card form">
         <div class="card-head"><h3>Свои relay-серверы</h3></div>
-        <p class="hint">Есть VPS с Linux? OpenLag сам поставит на него relay — свой выходной узел рядом с игровыми серверами. Нужен вход по SSH под root или с sudo: сервер добавляется во вкладке «Терминал».</p>
+        <p class="hint">Есть VPS с Linux? Pingless сам поставит на него relay — свой выходной узел рядом с игровыми серверами. Нужен вход по SSH под root или с sudo: сервер добавляется во вкладке «Терминал».</p>
         <div class="row wrap">
           <label class="field" style="flex:2;min-width:160px"><span>Сервер</span><select id="rd-host"></select></label>
-          <label class="field" style="flex:2;min-width:140px"><span>Название в OpenLag</span><input id="rd-name" placeholder="Франкфурт"></label>
+          <label class="field" style="flex:2;min-width:140px"><span>Название в Pingless</span><input id="rd-name" placeholder="Франкфурт"></label>
           <label class="field" style="flex:1;min-width:90px"><span>UDP-порт</span><input id="rd-port" type="number" value="7000" min="1024" max="65535"></label>
         </div>
         <div class="row end"><button class="btn" id="rd-remove">Удалить с сервера</button><button class="btn primary" id="rd-deploy">Установить relay</button></div>

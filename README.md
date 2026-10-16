@@ -1,14 +1,19 @@
-# OpenLag
+# Pingless
+
+**Free, open-source ExitLag alternative for Windows**: a game VPN / ping optimizer that
+routes only the games you pick through your own VPN subscriptions (VLESS, VMess, Trojan,
+Shadowsocks, Hysteria2, WireGuard, Amnezia) or your own multipath relays. Lower ping,
+less jitter and packet loss, no system-wide VPN.
 
 Open-source game traffic optimizer for Windows, a free alternative to paid "game VPNs".
-OpenLag captures the traffic of the programs you choose (games, a browser, a terminal,
+Pingless captures the traffic of the programs you choose (games, a browser, a terminal,
 anything) and sends it through **your** VPN subscriptions or **your own** relay servers.
 No TUN adapter, no system-wide VPN: everything else stays direct.
 
 [Русский ниже](#по-русски)
 
 ```
- game.exe ──UDP/TCP──► OpenLag (WinDivert) ──┬─► VPN server from your subscription (xray)
+ game.exe ──UDP/TCP──► Pingless (WinDivert) ──┬─► VPN server from your subscription (xray)
    ▲                                         └─► own relays: several routes at once ─► exit ─► game server
    └──────────── answers injected back ◄─────────────────────────────────────────────┘
 ```
@@ -24,8 +29,8 @@ No TUN adapter, no system-wide VPN: everything else stays direct.
 
 **Servers**
 - Subscriptions from Happ, Incy, Marzban, Remnawave; links `vless://` `vmess://` `trojan://`
-  `ss://` `wireguard://`, WireGuard `.conf`, Amnezia `vpn://` keys (Xray and WireGuard)
-- Import from clipboard, from a file or by `openlag://import?url=...` links
+  `ss://` `hysteria2://` `wireguard://`, WireGuard `.conf`, Amnezia `vpn://` keys (Xray and WireGuard)
+- Import from clipboard, from a file or by `pingless://import?url=...` links
 - Real exit country of every server, checked through the server itself (not by its name);
   one click switches a whole country off; filters by word; auto/balancer servers can be turned off
 - UDP ping, jitter and loss through every server, the way game packets go; per-server speed test
@@ -36,18 +41,20 @@ No TUN adapter, no system-wide VPN: everything else stays direct.
 
 **App**
 - Native-feeling window (no browser menus), tray menu, global hotkey (Ctrl+Alt+O)
-- Live charts; "without OpenLag → with OpenLag" ping to the very game servers you play on
+- Live charts; "without Pingless → with Pingless" ping to the very game servers you play on
 - Built-in terminal (local shells and SSH) on [xterm.js](https://github.com/xtermjs/xterm.js)
 - English and Russian; auto-update from GitHub Releases; settings backup
 
 ## Install
 
-Download `OpenLag-Setup-<version>.exe` from [Releases](https://github.com/Del-Iternenko/openlag/releases)
-and run it. It installs OpenLag with WinDivert, xray-core and (if missing) WebView2.
-OpenLag needs administrator rights to capture traffic. Some antivirus products flag
+> Formerly called OpenLag. Installing Pingless replaces an OpenLag install and keeps its settings.
+
+Download `Pingless-Setup-<version>.exe` from [Releases](https://github.com/Del-Iternenko/pingless/releases)
+and run it. It installs Pingless with WinDivert, xray-core and (if missing) WebView2.
+Pingless needs administrator rights to capture traffic. Some antivirus products flag
 WinDivert as a "hack tool" because it can intercept traffic.
 
-Start OpenLag **before** the game: UDP sockets that were already open stay direct,
+Start Pingless **before** the game: UDP sockets that were already open stay direct,
 because moving a live match to another IP usually disconnects it.
 
 ## Own relays
@@ -103,15 +110,15 @@ xterm.js (MIT), flag-icons (MIT).
 
 ## По-русски
 
-OpenLag — бесплатный open-source оптимизатор игрового трафика для Windows, альтернатива
+Pingless — бесплатный open-source оптимизатор игрового трафика для Windows, альтернатива
 платным «игровым VPN». Пускает выбранные программы через ваши VPN-подписки (Happ, Incy,
 Amnezia, WireGuard...) или через свои relay-серверы, без TUN и без VPN на весь компьютер.
 
 - Перехват по процессам, группы со своим сервером, автоподключение при запуске игры, kill switch
 - Реальная страна выхода каждого сервера, отключение стран одним щелчком, фильтры
-- Пинг, джиттер и потери через каждый сервер; тест скорости; «без OpenLag → с OpenLag»
+- Пинг, джиттер и потери через каждый сервер; тест скорости; «без Pingless → с Pingless»
 - Отпечаток TLS, фрагментация против DPI, mux, DoH
 - Свои relay: multipath по нескольким маршрутам, установка на VPS в один клик по SSH
 - Встроенный терминал, трей, горячая клавиша, автообновление, русский и английский
 
-Установщик — в [Releases](https://github.com/Del-Iternenko/openlag/releases).
+Установщик — в [Releases](https://github.com/Del-Iternenko/pingless/releases).

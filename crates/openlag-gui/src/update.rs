@@ -1,9 +1,9 @@
 //! Updates from GitHub Releases.
 //!
 //! The latest release is checked on start and every 6 hours. Updating downloads the
-//! release's `OpenLag-Setup-*.exe`, verifies its size and SHA-256 (GitHub publishes a
+//! release's `Pingless-Setup-*.exe`, verifies its size and SHA-256 (GitHub publishes a
 //! digest per asset), and runs it with `--update`: the installer reinstalls into the
-//! same folder with the same options and starts OpenLag again.
+//! same folder with the same options and starts Pingless again.
 
 use std::path::PathBuf;
 
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 
-pub const REPO: &str = "Del-Iternenko/openlag";
+pub const REPO: &str = "Del-Iternenko/pingless";
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,7 +52,7 @@ struct Asset {
 
 fn client() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
-        .user_agent(format!("OpenLag/{CURRENT}"))
+        .user_agent(format!("Pingless/{CURRENT}"))
         .timeout(std::time::Duration::from_secs(30))
         .build()?)
 }
@@ -88,7 +88,7 @@ pub async fn check() -> Result<UpdateInfo> {
         _ => false,
     };
     let asset = rel.assets.iter().find(|a| {
-        a.name.to_lowercase().starts_with("openlag-setup")
+        a.name.to_lowercase().starts_with("pingless-setup")
             && a.name.to_lowercase().ends_with(".exe")
     });
     Ok(UpdateInfo {
@@ -118,7 +118,7 @@ pub async fn download(app: &AppHandle, info: &UpdateInfo) -> Result<PathBuf> {
     );
     let resp = client()?.get(url).send().await?.error_for_status()?;
     let total = resp.content_length().unwrap_or(info.size).max(1);
-    let path = std::env::temp_dir().join(format!("OpenLag-Setup-{}.exe", info.latest));
+    let path = std::env::temp_dir().join(format!("Pingless-Setup-{}.exe", info.latest));
     let mut file = tokio::fs::File::create(&path).await?;
     let mut hasher = Sha256::new();
     let mut done = 0u64;

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "OpenLag Setup",
+  "productName": "Pingless Setup",
   "version": "1.0.0",
   "identifier": "dev.openlag.setup",
   "build": { "frontendDist": "ui" },
@@ -9,7 +9,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Установка OpenLag",
+        "title": "Установка Pingless",
         "width": 920,
         "height": 580,
         "resizable": false,

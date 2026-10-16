@@ -1,6 +1,6 @@
 [package]
 name = "openlag-relay"
-description = "OpenLag relay: exit node next to game servers, or bridge in front of one"
+description = "Pingless relay: exit node next to game servers, or bridge in front of one"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

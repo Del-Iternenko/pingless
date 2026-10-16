@@ -78,7 +78,7 @@ async fn probe_inner(socks: SocketAddr) -> Result<Geo> {
     let mut rest = vec![0u8; skip + 2];
     s.read_exact(&mut rest).await?;
     let get = format!(
-        "GET /cdn-cgi/trace HTTP/1.1\r\nHost: {HOST}\r\nUser-Agent: OpenLag\r\nConnection: close\r\n\r\n"
+        "GET /cdn-cgi/trace HTTP/1.1\r\nHost: {HOST}\r\nUser-Agent: Pingless\r\nConnection: close\r\n\r\n"
     );
     s.write_all(get.as_bytes()).await?;
     let mut body = Vec::new();

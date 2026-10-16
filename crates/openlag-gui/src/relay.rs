@@ -1,5 +1,5 @@
 //! One-click install of our own relay (exit node) on the user's Linux server over SSH:
-//! uploads the static Linux build that ships with OpenLag, runs it as a systemd
+//! uploads the static Linux build that ships with Pingless, runs it as a systemd
 //! service and opens the UDP port in ufw/firewalld. Progress goes to a terminal tab.
 
 use std::net::SocketAddr;
@@ -168,8 +168,8 @@ pub async fn deploy(
 
     let bin = binary(bin_dirs, arch).with_context(|| {
         tr!(
-            "нет сборки relay для {arch} рядом с OpenLag",
-            "no relay build for {arch} next to OpenLag"
+            "нет сборки relay для {arch} рядом с Pingless",
+            "no relay build for {arch} next to Pingless"
         )
     })?;
     let data = std::fs::read(&bin)
@@ -316,7 +316,7 @@ mkdir -p /etc/openlag
 ( umask 077; printf 'OPENLAG_PSK=%s\n' '{psk}' > /etc/openlag/relay.env )
 cat > /etc/systemd/system/openlag-relay.service <<'EOF'
 [Unit]
-Description=OpenLag relay (exit node)
+Description=Pingless relay (exit node)
 After=network-online.target
 Wants=network-online.target
 

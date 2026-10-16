@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use openlag_relay::{BridgeConfig, ExitConfig, run_bridge, run_exit};
 
 #[derive(Parser)]
-#[command(name = "openlag-relay", version, about = "OpenLag relay node")]
+#[command(name = "openlag-relay", version, about = "Pingless relay node")]
 struct Cli {
     #[command(subcommand)]
     role: Role,

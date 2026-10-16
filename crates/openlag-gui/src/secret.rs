@@ -9,7 +9,7 @@ use windows_sys::Win32::Security::Cryptography::{
     CRYPT_INTEGER_BLOB, CryptProtectData, CryptUnprotectData,
 };
 
-const ENTROPY: &[u8] = b"OpenLag ssh secret v1";
+const ENTROPY: &[u8] = b"Pingless ssh secret v1";
 
 pub fn protect(plain: &str) -> Result<String> {
     if plain.is_empty() {

@@ -17,15 +17,15 @@ const I18N = (() => {
     "Оптимизация выключена": "Optimization off",
     "Нажмите, чтобы пустить игры через выбранный сервер": "Click to route your games through the selected server",
     "Сервер": "Server", "пинг до сервера, мс": "ping to server, ms", "Джиттер": "Jitter", "Потери": "Loss",
-    "Пинг до тех же серверов игры: напрямую с вашей сетевой карты и через OpenLag (по ответам самой игры)":
-      "Ping to the same game servers: directly from your network card and through OpenLag (from the game's own replies)",
-    "Без OpenLag → с OpenLag": "Without OpenLag → with OpenLag",
+    "Пинг до тех же серверов игры: напрямую с вашей сетевой карты и через Pingless (по ответам самой игры)":
+      "Ping to the same game servers: directly from your network card and through Pingless (from the game's own replies)",
+    "Без Pingless → с Pingless": "Without Pingless → with Pingless",
     "появится, когда игра начнёт пинговать свои серверы": "appears once the game starts pinging its servers",
     "ждём, пока игра пропингует свои серверы": "waiting for the game to ping its servers",
     "Соединений": "Connections", "Пинг, мс": "Ping, ms", "Потери пакетов, %": "Packet loss, %", "Соединения": "Connections",
     "Тип": "Type", "Куда": "Destination", "Через": "Via",
     "ICMP напрямую с сетевой карты, в обход любых туннелей": "ICMP straight from the network card, bypassing any tunnels",
-    "Без OpenLag": "Without OpenLag", "С OpenLag": "With OpenLag", "Трафик": "Traffic",
+    "Без Pingless": "Without Pingless", "С Pingless": "With Pingless", "Трафик": "Traffic",
     "Время ответа сервера на пакеты самой игры через туннель": "Server reply time to the game's own packets through the tunnel",
     "Пока нет. Включите оптимизацию и запустите программу.": "Nothing yet. Turn on optimization and start a program.",
     "нет ответа": "no reply", "напрямую": "direct", "поток": "stream",
@@ -34,7 +34,7 @@ const I18N = (() => {
     "Без прав администратора перехват трафика не работает. Пинг до серверов меряется и так.":
       "Traffic capture needs administrator rights. Server ping is measured anyway.",
     "Перезапустить от администратора": "Restart as administrator",
-    "Нет WinDivert.dll / WinDivert64.sys рядом с OpenLag: перехват недоступен.": "WinDivert.dll / WinDivert64.sys are missing next to OpenLag: capture is unavailable.",
+    "Нет WinDivert.dll / WinDivert64.sys рядом с Pingless: перехват недоступен.": "WinDivert.dll / WinDivert64.sys are missing next to Pingless: capture is unavailable.",
     "Нет серверов. Добавьте подписку от VPN-сервиса.": "No servers. Add a subscription from your VPN service.",
     "Добавить подписку": "Add subscription", "Не выбраны процессы.": "No processes selected.", "Выбрать процессы": "Select processes",
     "Обновить": "Update",
@@ -44,7 +44,7 @@ const I18N = (() => {
       "Ping is measured over UDP through the server itself, the way game packets will go. New connections use the selected server, or in “Auto” the one with the best ping. Servers switched off are not started and never picked.",
     "Страны выхода": "Exit countries", "По пингу": "By ping", "По странам": "By country", "Перепроверить страны": "Re-check countries",
     "Страна определяется не по названию, а по факту: через каждый сервер запрашивается Cloudflare, и он сообщает, с какого IP и из какой страны реально выходит трафик. Щелчок по стране отключает или включает все её серверы.":
-      "The country comes from the facts, not the name: OpenLag asks Cloudflare through each server which IP and country the traffic really exits from. Click a country to switch all its servers off or on.",
+      "The country comes from the facts, not the name: Pingless asks Cloudflare through each server which IP and country the traffic really exits from. Click a country to switch all its servers off or on.",
     "Фильтры: отключить серверы по слову": "Filters: switch servers off by word", "например: Russia": "e.g. Russia",
     "Добавить": "Add", "Серверов нет. Добавьте подписку на вкладке «Подписки».": "No servers. Add a subscription on the “Subscriptions” tab.",
     "пинг": "ping", "джиттер": "jitter", "потери": "loss", "ошибка": "error", "Выбрать": "Select", "Выбран": "Selected",
@@ -94,7 +94,7 @@ const I18N = (() => {
     "Работает для своих relay-серверов: пакет идёт по нескольким маршрутам сразу, доходит первый. VPN-сервер из подписки — это всегда один маршрут.":
       "For your own relays: each packet goes over several routes at once and the first copy wins. A subscription VPN server is always one route.",
     "Переводить в туннель уже открытые соединения": "Move already open connections into the tunnel",
-    "Обычно выкидывает из идущего матча. Лучше включать OpenLag до запуска игры.": "Usually drops you from a running match. Better turn OpenLag on before starting the game.",
+    "Обычно выкидывает из идущего матча. Лучше включать Pingless до запуска игры.": "Usually drops you from a running match. Better turn Pingless on before starting the game.",
     "Если ни один сервер не отвечает, трафик выбранных программ блокируется, а не уходит напрямую в обход VPN. Без сервера программы просто не будут работать.":
       "If no server answers, the selected programs' traffic is blocked instead of leaking around the VPN. Without a server they simply won't work.",
     "Обходить TUN других VPN": "Bypass other VPNs' TUN",
@@ -111,7 +111,7 @@ const I18N = (() => {
     "Несколько TCP-соединений идут внутри одного: меньше рукопожатий для браузера, но для игр лучше выключить. Не применяется к XTLS Vision.":
       "Several TCP connections share one: fewer handshakes for the browser, but keep it off for games. Not used with XTLS Vision.",
     "DNS для адресов серверов": "DNS for server addresses", "Системный": "System", "Яндекс DoH": "Yandex DoH", "Яндекс 77.88.8.8": "Yandex 77.88.8.8",
-    "Через что OpenLag узнаёт IP серверов из подписки. DoH прячет запросы от провайдера.": "How OpenLag looks up the IPs of subscription servers. DoH hides the lookups from your ISP.",
+    "Через что Pingless узнаёт IP серверов из подписки. DoH прячет запросы от провайдера.": "How Pingless looks up the IPs of subscription servers. DoH hides the lookups from your ISP.",
     "Цель замера пинга через серверы": "Ping target through servers", "Пинг сервера = время DNS-запроса к этому адресу через сам сервер по UDP.": "Server ping = time of a DNS query to this address through the server over UDP.",
     "Применить": "Apply", "Применено: серверы перезапущены": "Applied: servers restarted",
     "Оформление": "Appearance", "Язык": "Language", "Цвет акцента": "Accent colour", "Изумрудный": "Emerald", "Синий": "Blue", "Фиолетовый": "Violet",
@@ -121,15 +121,15 @@ const I18N = (() => {
     "Компактный режим": "Compact mode", "Меньше отступов, больше строк на экране.": "Less padding, more rows on screen.",
     "Запуск": "Startup", "Запускать вместе с Windows": "Start with Windows", "Через Планировщик задач с правами администратора, без окна UAC при входе.": "Via Task Scheduler with administrator rights, no UAC prompt at sign-in.",
     "Запускать свёрнутым": "Start minimized", "Крестик сворачивает в трей": "Close button minimizes to tray",
-    "OpenLag продолжит работать: иконка у часов, левый клик открывает окно, правый даёт меню с переключателем и выбором сервера. «Выход» в меню трея закрывает программу совсем.":
-      "OpenLag keeps running: an icon by the clock, left click opens the window, right click gives a menu with the switch and server choice. “Quit” in the tray menu closes it for good.",
-    "Проверять обновления": "Check for updates", "Раз в 6 часов OpenLag смотрит последний релиз на GitHub. Обновление ставится только по вашей кнопке.": "Every 6 hours OpenLag looks at the latest release on GitHub. Updates install only when you click.",
+    "Pingless продолжит работать: иконка у часов, левый клик открывает окно, правый даёт меню с переключателем и выбором сервера. «Выход» в меню трея закрывает программу совсем.":
+      "Pingless keeps running: an icon by the clock, left click opens the window, right click gives a menu with the switch and server choice. “Quit” in the tray menu closes it for good.",
+    "Проверять обновления": "Check for updates", "Раз в 6 часов Pingless смотрит последний релиз на GitHub. Обновление ставится только по вашей кнопке.": "Every 6 hours Pingless looks at the latest release on GitHub. Updates install only when you click.",
     "Проверить сейчас": "Check now", "Частота замера пинга своих relay": "Ping rate for own relays",
     "10 раз в секунду": "10 times a second", "4 раза в секунду": "4 times a second", "2 раза в секунду": "twice a second", "раз в секунду": "once a second",
     "Свои relay-серверы": "Own relay servers",
-    "Есть VPS с Linux? OpenLag сам поставит на него relay — свой выходной узел рядом с игровыми серверами. Нужен вход по SSH под root или с sudo: сервер добавляется во вкладке «Терминал».":
-      "Have a Linux VPS? OpenLag installs a relay on it for you — your own exit node next to the game servers. Needs SSH login as root or with sudo: add the server on the “Terminal” tab.",
-    "Название в OpenLag": "Name in OpenLag", "Франкфурт": "Frankfurt", "UDP-порт": "UDP port", "Удалить с сервера": "Remove from server",
+    "Есть VPS с Linux? Pingless сам поставит на него relay — свой выходной узел рядом с игровыми серверами. Нужен вход по SSH под root или с sudo: сервер добавляется во вкладке «Терминал».":
+      "Have a Linux VPS? Pingless installs a relay on it for you — your own exit node next to the game servers. Needs SSH login as root or with sudo: add the server on the “Terminal” tab.",
+    "Название в Pingless": "Name in Pingless", "Франкфурт": "Frankfurt", "UDP-порт": "UDP port", "Удалить с сервера": "Remove from server",
     "Установить relay": "Install relay", "Вручную (TOML): ключ и маршруты, в том числе через мосты": "Manually (TOML): key and routes, bridges included",
     "Сохранить relay": "Save relays",
     'psk = "секрет"\n\n[[exits]]\nname = "Франкфурт"\nroutes = [\n  { name = "direct", via = "203.0.113.10:7000" },\n  { name = "bridge", via = "198.51.100.20:7001" },\n]':
@@ -158,7 +158,7 @@ const I18N = (() => {
     "Из буфера": "From clipboard", "В буфере обмена нет ссылки или ключей": "The clipboard has no link or keys",
     "Ссылка из браузера: проверьте её и нажмите «Добавить»": "Link from the browser: check it and click “Add”",
     "Тест скорости": "Speed test", "Удобство": "Convenience", "Горячая клавиша вкл/выкл оптимизации": "Hotkey to toggle optimization",
-    "Нет": "None", "Работает и в полноэкранной игре, без переключения в OpenLag.": "Works in a full-screen game too, without switching to OpenLag.",
+    "Нет": "None", "Работает и в полноэкранной игре, без переключения в Pingless.": "Works in a full-screen game too, without switching to Pingless.",
     "Высокий приоритет для выбранных программ": "High priority for selected programs",
     "Пока оптимизация включена, игры из групп получают высокий приоритет процессора, как «буст» в платных игровых VPN. Выключили оптимизацию — приоритет вернётся обычный.":
       "While optimization is on, the programs in your groups get high CPU priority, like the “boost” of paid game VPNs. Turn optimization off and the priority goes back to normal.",
@@ -201,7 +201,7 @@ const I18N = (() => {
     [/^(.+) → (.+) мс$/, "$1 → $2 ms"],
     [/^джиттер (.+) → (.+) мс · серверов: (\d+)$/, "jitter $1 → $2 ms · servers: $3"],
     [/^показано 30 из (\d+) TCP$/, "showing 30 of $1 TCP"],
-    [/^Доступна новая версия OpenLag (.+) \(у вас (.+)\)\.$/, "OpenLag $1 is available (you have $2)."],
+    [/^Доступна новая версия Pingless (.+) \(у вас (.+)\)\.$/, "Pingless $1 is available (you have $2)."],
     [/^Через туннель: (.+)$/, "Through the tunnel: $1"],
     [/^Будет через туннель: (.+)$/, "Will go through the tunnel: $1"],
     [/^весь трафик, кроме (\d+) процесс\.$/, "all traffic except $1 processes"],
@@ -240,7 +240,7 @@ const I18N = (() => {
     [/^Версия (.+) · доступна (.+)$/, "Version $1 · $2 available"],
     [/^Версия (.+)$/, "Version $1"],
     [/^(.+) \(в обход чужих TUN\)$/, "$1 (bypassing other TUNs)"],
-    [/^Скачиваю OpenLag (.*)…$/, "Downloading OpenLag $1…"],
+    [/^Скачиваю Pingless (.*)…$/, "Downloading Pingless $1…"],
     [/^Загрузка (\d+)%$/, "Downloading $1%"],
     [/^Доступна версия (.+)$/, "Version $1 is available"],
     [/^У вас последняя версия \((.+)\)$/, "You have the latest version ($1)"],

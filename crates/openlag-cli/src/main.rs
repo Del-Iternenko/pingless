@@ -159,7 +159,7 @@ async fn dashboard(engine: &Engine, extra: impl Fn() -> String) -> Result<()> {
 }
 
 fn render(snap: &Snapshot, history: &HashMap<u16, Vec<Option<f64>>>) -> String {
-    let mut out = String::from("OpenLag\n\nROUTES\n");
+    let mut out = String::from("Pingless\n\nROUTES\n");
     out += &format!(
         "  {:<1} {:<14} {:<18} {:>8} {:>8} {:>7}  {}\n",
         "", "exit", "route", "ping", "jitter", "loss", "last 40 s"

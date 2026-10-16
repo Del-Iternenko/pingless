@@ -1,4 +1,4 @@
-//! "Without OpenLag": direct ICMP ping from the physical network card to the same
+//! "Without Pingless": direct ICMP ping from the physical network card to the same
 //! game servers the tunnel carries, so the UI can show both side by side.
 //!
 //! The echo is sent with the physical adapter's address as source, so another VPN's

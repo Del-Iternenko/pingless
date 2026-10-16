@@ -1,6 +1,6 @@
 [package]
 name = "openlag-cli"
-description = "OpenLag command-line client"
+description = "Pingless command-line client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

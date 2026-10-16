@@ -37,7 +37,7 @@ pub struct Settings {
     /// Start with Windows (scheduled task with highest privileges).
     pub autostart: bool,
     pub start_minimized: bool,
-    /// The window's close button hides OpenLag to the tray instead of quitting.
+    /// The window's close button hides Pingless to the tray instead of quitting.
     pub close_to_tray: bool,
     /// Block the selected programs' traffic when no server is reachable instead of
     /// letting it go direct.

@@ -1,4 +1,4 @@
-//! OpenLag client engine.
+//! Pingless client engine.
 //!
 //! The engine knows nothing about how packets are captured. The capture layer hands it
 //! UDP payloads of game flows with [`Engine::send_upstream`] and gets answers back

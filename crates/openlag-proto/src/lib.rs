@@ -1,4 +1,4 @@
-//! Wire protocol shared by the OpenLag client and relay.
+//! Wire protocol shared by the Pingless client and relay.
 //!
 //! Every datagram between a client and a relay looks like this:
 //!

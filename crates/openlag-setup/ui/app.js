@@ -26,7 +26,7 @@ const TIPS = [
   "Совет: фильтры серверов отключают целые страны одним словом, например «Russia», даже после обновления подписки.",
   "Совет: multipath отправляет каждый пакет по нескольким маршрутам, и потери на одном из них игра просто не заметит.",
   "Совет: режим «Всё, кроме выбранных» пустит через VPN весь компьютер, кроме программ из списка.",
-  "Совет: включён Happ или другой VPN в режиме TUN? OpenLag обойдёт его, чтобы трафик не шёл через два VPN подряд.",
+  "Совет: включён Happ или другой VPN в режиме TUN? Pingless обойдёт его, чтобы трафик не шёл через два VPN подряд.",
   "Совет: на вкладке «Фан» есть змейка. Просто чтобы было.",
 ];
 
@@ -113,7 +113,7 @@ function updateSpace() {
 }
 $("opt-extras").addEventListener("change", (e) => {
   updateSpace();
-  if (!e.target.checked) showError("Без дополнительного ПО OpenLag не сможет перехватывать трафик: ставьте только если WinDivert и xray уже лежат в папке программы.");
+  if (!e.target.checked) showError("Без дополнительного ПО Pingless не сможет перехватывать трафик: ставьте только если WinDivert и xray уже лежат в папке программы.");
 });
 $("browse").addEventListener("click", async () => {
   const dir = await invoke("pick_dir", { current: $("dir").value });
@@ -179,8 +179,8 @@ async function runUpdate() {
   try {
     await invoke("install", { opts });
     clearInterval(tipTimer);
-    $("done-title").textContent = `OpenLag обновлён до ${info.version}`;
-    $("done-text").textContent = "Настройки, подписки и группы на месте. OpenLag сейчас запустится.";
+    $("done-title").textContent = `Pingless обновлён до ${info.version}`;
+    $("done-text").textContent = "Настройки, подписки и группы на месте. Pingless сейчас запустится.";
     showStep("done");
     $("finish").onclick = () => win.close();
     setTimeout(async () => {
@@ -204,10 +204,10 @@ $("go-un").addEventListener("click", async () => {
   const removeSettings = $("rm-settings").checked;
   $("progress-title").textContent = "Удаление…";
   showStep("progress");
-  $("tip").textContent = "Спасибо, что попробовали OpenLag. Будем рады issue и звёздочке на GitHub.";
+  $("tip").textContent = "Спасибо, что попробовали Pingless. Будем рады issue и звёздочке на GitHub.";
   try {
     await invoke("uninstall", { removeSettings });
-    $("done-title").textContent = "OpenLag удалён";
+    $("done-title").textContent = "Pingless удалён";
     $("done-text").textContent = removeSettings ? "Программа, ярлыки и настройки удалены." : "Программа и ярлыки удалены, настройки и подписки сохранены на случай, если вернётесь.";
     showStep("done");
     $("finish").onclick = () => win.close();

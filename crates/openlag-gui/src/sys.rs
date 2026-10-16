@@ -43,6 +43,8 @@ pub fn process_names() -> Vec<String> {
         "secure system",
         "[system process]",
         "openlag.exe",
+        "pingless.exe",
+        "pingless-xray.exe",
         "openlag-gui.exe",
         "xray.exe",
         "msedgewebview2.exe",
@@ -105,7 +107,7 @@ pub fn relaunch_as_admin() -> bool {
 /// Recreated on every start so the rule follows the exe if it was moved.
 pub fn ensure_firewall_rule() -> anyhow::Result<()> {
     use std::os::windows::process::CommandExt;
-    const NAME: &str = "name=OpenLag local proxy";
+    const NAME: &str = "name=Pingless local proxy";
     let exe = std::env::current_exe()?;
     let netsh = |args: &[&str]| {
         std::process::Command::new("netsh")
@@ -115,6 +117,8 @@ pub fn ensure_firewall_rule() -> anyhow::Result<()> {
             .output()
     };
     let _ = netsh(&["delete", "rule", NAME]);
+    // Left over by versions called OpenLag.
+    let _ = netsh(&["delete", "rule", "name=OpenLag local proxy"]);
     let program = format!("program={}", exe.display());
     let out = netsh(&[
         "add",
@@ -135,7 +139,7 @@ pub fn ensure_firewall_rule() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Starts OpenLag at logon through Task Scheduler with highest privileges, so there is
+/// Starts Pingless at logon through Task Scheduler with highest privileges, so there is
 /// no UAC prompt at every login (a Run registry key cannot elevate).
 pub fn set_autostart(on: bool) -> anyhow::Result<()> {
     use std::os::windows::process::CommandExt;
@@ -145,14 +149,16 @@ pub fn set_autostart(on: bool) -> anyhow::Result<()> {
             .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .output()
     };
+    // The task of versions called OpenLag.
+    let _ = schtasks(&["/Delete", "/TN", "OpenLag", "/F"]);
     if !on {
-        let _ = schtasks(&["/Delete", "/TN", "OpenLag", "/F"]);
+        let _ = schtasks(&["/Delete", "/TN", "Pingless", "/F"]);
         return Ok(());
     }
     let exe = std::env::current_exe()?;
     let run = format!("\"{}\" --minimized", exe.display());
     let out = schtasks(&[
-        "/Create", "/TN", "OpenLag", "/TR", &run, "/SC", "ONLOGON", "/RL", "HIGHEST", "/F",
+        "/Create", "/TN", "Pingless", "/TR", &run, "/SC", "ONLOGON", "/RL", "HIGHEST", "/F",
     ])?;
     anyhow::ensure!(
         out.status.success(),
@@ -196,7 +202,7 @@ pub fn wait_for_pid(pid: u32, ms: u32) {
     }
 }
 
-/// Registers `openlag://` links for the current user, so "Add to OpenLag" buttons on
+/// Registers `pingless://` links for the current user, so "Add to Pingless" buttons on
 /// subscription pages open this app. Re-done on every start to follow the exe.
 pub fn register_url_scheme() -> anyhow::Result<()> {
     use std::os::windows::process::CommandExt;
@@ -210,8 +216,12 @@ pub fn register_url_scheme() -> anyhow::Result<()> {
         };
         c.creation_flags(0x0800_0000).output()
     };
-    const KEY: &str = r"HKCU\Software\Classes\openlag";
-    reg(KEY, None, "URL:OpenLag")?;
+    let _ = std::process::Command::new("reg")
+        .args(["delete", r"HKCU\Software\Classes\openlag", "/f"])
+        .creation_flags(0x0800_0000)
+        .output();
+    const KEY: &str = r"HKCU\Software\Classes\pingless";
+    reg(KEY, None, "URL:Pingless")?;
     reg(KEY, Some("URL Protocol"), "")?;
     reg(
         &format!(r"{KEY}\DefaultIcon"),

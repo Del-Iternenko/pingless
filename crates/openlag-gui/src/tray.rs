@@ -47,13 +47,13 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         &[&MenuItem::with_id(
             app,
             "open",
-            &tr!("Открыть OpenLag", "Open OpenLag"),
+            &tr!("Открыть Pingless", "Open Pingless"),
             true,
             None::<&str>,
         )?],
     )?;
     let mut builder = TrayIconBuilder::with_id(TRAY)
-        .tooltip("OpenLag")
+        .tooltip("Pingless")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
@@ -178,9 +178,9 @@ pub fn update(app: &AppHandle, capturing: bool, preferred: Option<&str>, servers
         tr!("выключено", "off")
     };
     let tooltip = if current.is_empty() {
-        format!("OpenLag: {state}")
+        format!("Pingless: {state}")
     } else {
-        format!("OpenLag: {state}\n{current}")
+        format!("Pingless: {state}\n{current}")
     };
     if sh.tooltip != tooltip {
         let _ = tray.set_tooltip(Some(&tooltip));
@@ -199,7 +199,7 @@ fn build_menu(app: &AppHandle, servers: &[TrayServer]) -> tauri::Result<Built> {
     let open = MenuItem::with_id(
         app,
         "open",
-        &tr!("Открыть OpenLag", "Open OpenLag"),
+        &tr!("Открыть Pingless", "Open Pingless"),
         true,
         None::<&str>,
     )?;

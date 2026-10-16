@@ -1,6 +1,6 @@
 [package]
 name = "openlag-setup"
-description = "OpenLag installer"
+description = "Pingless installer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

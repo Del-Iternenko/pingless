@@ -1,6 +1,6 @@
 [package]
 name = "openlag-proto"
-description = "Wire protocol shared by the OpenLag client and relay"
+description = "Wire protocol shared by the Pingless client and relay"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

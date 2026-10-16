@@ -120,7 +120,7 @@ struct Tick {
     snapshot: Option<Snapshot>,
     capture: Option<CaptureView>,
     capturing: bool,
-    /// Game server IP -> direct ping without OpenLag.
+    /// Game server IP -> direct ping without Pingless.
     direct: HashMap<String, compare::Direct>,
 }
 
@@ -223,7 +223,7 @@ impl AppState {
             let exe = self
                 .xray_exe
                 .as_ref()
-                .context("xray.exe is missing next to OpenLag")?;
+                .context("xray.exe is missing next to Pingless")?;
             net.bind_interface = if s.bypass_tun {
                 openlag_proxy::physical_interface().map(|i| i.name)
             } else {
@@ -515,7 +515,13 @@ fn find_xray(resource_dir: Option<PathBuf>) -> Option<PathBuf> {
     dirs.extend(resource_dir);
     let mut candidates: Vec<PathBuf> = dirs
         .iter()
-        .flat_map(|d| [d.join("openlag-xray.exe"), d.join("xray.exe")])
+        .flat_map(|d| {
+            [
+                d.join("pingless-xray.exe"),
+                d.join("openlag-xray.exe"),
+                d.join("xray.exe"),
+            ]
+        })
         .collect();
     if cfg!(debug_assertions) {
         candidates
@@ -943,8 +949,8 @@ fn main() {
     }
 
     let mut builder = tauri::Builder::default();
-    // A second launch (or an openlag:// link) brings up the running one. Dev builds
-    // skip it unless asked: they would hand over to an installed, elevated OpenLag.
+    // A second launch (or a pingless:// link) brings up the running one. Dev builds
+    // skip it unless asked: they would hand over to an installed, elevated Pingless.
     if !cfg!(debug_assertions) || std::env::var_os("OPENLAG_SINGLE_INSTANCE").is_some() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             tray::show_window(app);
@@ -981,7 +987,7 @@ fn main() {
                 warn!("tray icon: {e}");
             }
             if let Err(e) = sys::register_url_scheme() {
-                warn!("openlag:// links: {e:#}");
+                warn!("pingless:// links: {e:#}");
             }
             let hotkey = state.settings.lock().hotkey.clone();
             if let Err(e) = apply_hotkey(app.handle(), &hotkey) {
@@ -1108,7 +1114,7 @@ fn main() {
             start_page,
         ])
         .build(tauri::generate_context!())
-        .expect("failed to build OpenLag")
+        .expect("failed to build Pingless")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 // Close WinDivert handles and stop xray before the process ends.
@@ -1294,7 +1300,7 @@ async fn auto_update_check(st: Arc<AppState>, handle: tauri::AppHandle) {
 
 static SHOWN_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Shows the main window the first time, unless OpenLag was started minimized (then it
+/// Shows the main window the first time, unless Pingless was started minimized (then it
 /// stays in the tray).
 fn show_on_start(app: &tauri::AppHandle) {
     if SHOWN_ONCE.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -1658,8 +1664,8 @@ fn relay_deploy(
                 state.rebuild().await;
                 let _ = app.emit("relays-changed", ());
                 tr!(
-                    "relay «{name}» установлен и добавлен в OpenLag",
-                    "relay “{name}” installed and added to OpenLag"
+                    "relay «{name}» установлен и добавлен в Pingless",
+                    "relay “{name}” installed and added to Pingless"
                 )
             }
             Err(e) => {
@@ -1710,14 +1716,17 @@ fn relay_remove(
 }
 
 // ---------------------------------------------------------------------------
-// openlag:// links, hotkey, priority boost, speed test, backup
+// pingless:// links, hotkey, priority boost, speed test, backup
 
 static PENDING_LINK: parking_lot::Mutex<Option<String>> = parking_lot::Mutex::new(None);
 
-/// What to import from an `openlag://` link: `openlag://import?url=<encoded>`,
-/// `openlag://import/<link>` or `openlag://<link>` (a subscription URL or keys).
+/// What to import from a `pingless://` link (old `openlag://` too):
+/// `pingless://import?url=<encoded>`, `pingless://import/<link>` or `pingless://<link>`.
 fn deep_link(arg: &str) -> Option<String> {
-    let rest = arg.trim().strip_prefix("openlag://")?;
+    let rest = arg
+        .trim()
+        .strip_prefix("pingless://")
+        .or_else(|| arg.trim().strip_prefix("openlag://"))?;
     let rest = rest.trim_end_matches('/');
     let payload = if let Some(q) = rest
         .strip_prefix("import?")
@@ -1930,8 +1939,8 @@ async fn import_settings(app: tauri::AppHandle, st: Shared<'_>) -> CmdResult<boo
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
     let mut new: Settings = serde_json::from_slice(&bytes).map_err(|e| {
         tr!(
-            "это не резервная копия OpenLag: {e}",
-            "not an OpenLag backup: {e}"
+            "это не резервная копия Pingless: {e}",
+            "not an Pingless backup: {e}"
         )
     })?;
     {
@@ -1952,7 +1961,7 @@ mod link_tests {
     #[test]
     fn deep_links() {
         assert_eq!(
-            deep_link("openlag://import?url=https%3A%2F%2Fsub.example.com%2Fabc%3Fx%3D1")
+            deep_link("pingless://import?url=https%3A%2F%2Fsub.example.com%2Fabc%3Fx%3D1")
                 .as_deref(),
             Some("https://sub.example.com/abc?x=1")
         );

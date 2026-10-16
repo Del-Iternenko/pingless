@@ -12,7 +12,7 @@ multipath = 2
 [capture]
 # Executable names whose UDP traffic is tunnelled (case-insensitive).
 processes = ["cs2.exe"]
-# Also move UDP sockets that were open before OpenLag started. Usually disconnects
+# Also move UDP sockets that were open before Pingless started. Usually disconnects
 # a running match, so it is off by default.
 tunnel_existing = false
 

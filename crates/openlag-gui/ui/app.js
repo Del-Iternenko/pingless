@@ -53,7 +53,7 @@ const RU = [
   [/no servers found|returned no usable servers/i, "В подписке не нашлось поддерживаемых серверов"],
   [/answered HTTP (\d+)/i, "Сервер подписки ответил ошибкой HTTP $1"],
   [/Administrator rights were not granted/i, "Права администратора не выданы"],
-  [/xray\.exe is missing/i, "Не найден xray.exe рядом с OpenLag"],
+  [/xray\.exe is missing/i, "Не найден xray.exe рядом с Pingless"],
 ];
 function ru(msg) {
   msg = String(msg);
@@ -211,12 +211,12 @@ document.querySelectorAll(".nav").forEach((b) =>
 function renderAlerts() {
   const a = [];
   if (!state.admin) a.push(["warn", "Без прав администратора перехват трафика не работает. Пинг до серверов меряется и так.", `<button class="btn" id="relaunch">${icon("shield")}Перезапустить от администратора</button>`]);
-  if (!state.windivert) a.push(["error", "Нет WinDivert.dll / WinDivert64.sys рядом с OpenLag: перехват недоступен.", ""]);
+  if (!state.windivert) a.push(["error", "Нет WinDivert.dll / WinDivert64.sys рядом с Pingless: перехват недоступен.", ""]);
   if (!state.servers.length && !state.relay_names.length) a.push(["warn", "Нет серверов. Добавьте подписку от VPN-сервиса.", `<button class="btn" data-go="subs">${icon("plus")}Добавить подписку</button>`]);
   const selected = activeProcesses().length;
   if (state.settings.mode === "only" && !selected) a.push(["warn", "Не выбраны процессы.", `<button class="btn" data-go="procs">${icon("cpu")}Выбрать процессы</button>`]);
   if (state.net_error) a.push(["error", ru(state.net_error), ""]);
-  if (updateInfo?.available) a.push(["update", `Доступна новая версия OpenLag ${updateInfo.latest} (у вас ${updateInfo.current}).`, `<button class="btn primary" id="do-update">${icon("refresh")}Обновить</button>`]);
+  if (updateInfo?.available) a.push(["update", `Доступна новая версия Pingless ${updateInfo.latest} (у вас ${updateInfo.current}).`, `<button class="btn primary" id="do-update">${icon("refresh")}Обновить</button>`]);
   $("alerts").innerHTML = a.map(([k, t, b]) => `<div class="alert ${k === "error" || k === "update" ? k : ""}">${icon("shield")}<span>${esc(t)}</span>${b}</div>`).join("");
   $("relaunch")?.addEventListener("click", () => call("relaunch_admin"));
   $("do-update")?.addEventListener("click", installUpdate);
@@ -600,7 +600,7 @@ $("sub-clip").addEventListener("click", async () => {
   $("sub-input").value = text.trim();
   $("sub-add").click();
 });
-// "Add to OpenLag" buttons on subscription pages: openlag://import?url=...
+// "Add to Pingless" buttons on subscription pages: pingless://import?url=...
 function importLink(text) {
   document.querySelector('.nav[data-page="subs"]').click();
   $("sub-input").value = text;
@@ -955,7 +955,7 @@ async function installUpdate() {
   updating = true;
   const btn = $("do-update");
   if (btn) btn.disabled = true;
-  toast(`Скачиваю OpenLag ${updateInfo?.latest ?? ""}…`, "ok");
+  toast(`Скачиваю Pingless ${updateInfo?.latest ?? ""}…`, "ok");
   try {
     await invoke("install_update");
   } catch (e) {

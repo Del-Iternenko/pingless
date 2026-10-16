@@ -1,5 +1,5 @@
 [package]
-description = "OpenLag desktop app"
+description = "Pingless desktop app"
 name = "openlag-gui"
 default-run = "openlag-gui"
 version.workspace = true

@@ -1,7 +1,7 @@
-//! VPN subscriptions as OpenLag exits.
+//! VPN subscriptions as Pingless exits.
 //!
 //! Servers from Happ, Incy, Amnezia and similar providers speak Xray protocols
-//! (VLESS, VMess, Trojan, Shadowsocks) or WireGuard. OpenLag runs xray-core next to the client with
+//! (VLESS, VMess, Trojan, Shadowsocks) or WireGuard. Pingless runs xray-core next to the client with
 //! one local SOCKS5 port per server and sends game UDP through it, so no TUN adapter
 //! and no system-wide VPN is involved.
 

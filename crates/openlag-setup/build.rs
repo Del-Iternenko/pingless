@@ -1,5 +1,5 @@
 //! Packs the payload into the installer:
-//! - `core.zip`   from `$OPENLAG_PAYLOAD/core`   (OpenLag.exe and licenses)
+//! - `core.zip`   from `$OPENLAG_PAYLOAD/core`   (Pingless.exe and licenses)
 //! - `extras.zip` from `$OPENLAG_PAYLOAD/extras` (WinDivert, xray-core, WebView2 setup)
 //!
 //! and copies the background music to `ui/music.mp3`. Run `scripts/build-installer.ps1`

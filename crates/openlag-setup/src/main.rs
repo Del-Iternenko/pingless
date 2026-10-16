@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-//! OpenLag installer and uninstaller.
+//! Pingless installer and uninstaller.
 //!
 //! The payload (`core.zip`, `extras.zip`) is embedded at build time. A copy of this exe
 //! is placed in the install folder as `uninstall.exe`; started with `--uninstall` it
@@ -17,9 +17,9 @@ const EXTRAS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/extras.zip"));
 const CORE_SIZE: u64 = parse_u64(env!("OPENLAG_CORE_SIZE"));
 const EXTRAS_SIZE: u64 = parse_u64(env!("OPENLAG_EXTRAS_SIZE"));
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const APP_EXE: &str = "OpenLag.exe";
-const UNINSTALL_KEY: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OpenLag";
-pub const GITHUB: &str = "https://github.com/Del-Iternenko";
+const APP_EXE: &str = "Pingless.exe";
+const UNINSTALL_KEY: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Pingless";
+pub const GITHUB: &str = "https://github.com/Del-Iternenko/pingless";
 
 const fn parse_u64(s: &str) -> u64 {
     let b = s.as_bytes();
@@ -66,7 +66,7 @@ fn uninstall_mode() -> bool {
     std::env::args().any(|a| a == "--uninstall")
 }
 
-/// Started by OpenLag's updater: reinstall in place without asking anything.
+/// Started by Pingless's updater: reinstall in place without asking anything.
 fn update_mode() -> bool {
     std::env::args().any(|a| a == "--update")
 }
@@ -78,12 +78,59 @@ fn program_files() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(r"C:\Program Files"))
 }
 
-fn installed_dir() -> Option<PathBuf> {
+fn install_location(key: &str) -> Option<PathBuf> {
     let key = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
-        .open_subkey(UNINSTALL_KEY)
+        .open_subkey(key)
         .ok()?;
     let dir: String = key.get_value("InstallLocation").ok()?;
     Some(PathBuf::from(dir))
+}
+
+/// The app was called OpenLag up to 1.0; an install of that is replaced in place.
+const LEGACY_KEY: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OpenLag";
+
+fn legacy_dir() -> Option<PathBuf> {
+    install_location(LEGACY_KEY)
+}
+
+/// Where Pingless is (or, after an OpenLag install, will be) installed.
+fn installed_dir() -> Option<PathBuf> {
+    install_location(UNINSTALL_KEY).or_else(|| {
+        legacy_dir().map(|d| match d.parent() {
+            Some(p) if d.ends_with("OpenLag") => p.join("Pingless"),
+            _ => d,
+        })
+    })
+}
+
+/// Removes an OpenLag install (program, shortcuts, task, firewall rule, uninstall
+/// entry). Settings stay: Pingless keeps the same data folder.
+fn remove_legacy(new_dir: &Path) {
+    let Some(old) = legacy_dir() else { return };
+    stop_running(&old);
+    let _ = hidden("schtasks", &["/Delete", "/TN", "OpenLag", "/F"]);
+    let _ = hidden(
+        "netsh",
+        &[
+            "advfirewall",
+            "firewall",
+            "delete",
+            "rule",
+            "name=OpenLag local proxy",
+        ],
+    );
+    let _ = hidden("reg", &["delete", r"HKCU\Software\Classes\openlag", "/f"]);
+    let _ = std::fs::remove_file(start_menu_dir().join("OpenLag.lnk"));
+    let _ = std::fs::remove_file(public_desktop().join("OpenLag.lnk"));
+    // Only a folder that is clearly ours, and never the one we install into.
+    if old.ends_with("OpenLag") && old != new_dir && old.join("OpenLag.exe").exists() {
+        let _ = std::fs::remove_dir_all(&old);
+    }
+    let _ = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE).delete_subkey_all(LEGACY_KEY);
+}
+
+fn had_legacy_autostart() -> bool {
+    hidden("schtasks", &["/Query", "/TN", "OpenLag"]).is_ok_and(|o| o.status.success())
 }
 
 #[tauri::command]
@@ -97,14 +144,17 @@ fn info() -> Info {
         } else {
             "install"
         },
-        keep_desktop: public_desktop().join("OpenLag.lnk").exists(),
-        keep_start_menu: start_menu_dir().join("OpenLag.lnk").exists(),
-        keep_autostart: hidden("schtasks", &["/Query", "/TN", "OpenLag"])
-            .is_ok_and(|o| o.status.success()),
+        keep_desktop: public_desktop().join("Pingless.lnk").exists()
+            || public_desktop().join("OpenLag.lnk").exists(),
+        keep_start_menu: start_menu_dir().join("Pingless.lnk").exists()
+            || start_menu_dir().join("OpenLag.lnk").exists(),
+        keep_autostart: hidden("schtasks", &["/Query", "/TN", "Pingless"])
+            .is_ok_and(|o| o.status.success())
+            || had_legacy_autostart(),
         version: VERSION,
         default_dir: installed
             .clone()
-            .unwrap_or_else(|| program_files().join("OpenLag"))
+            .unwrap_or_else(|| program_files().join("Pingless"))
             .display()
             .to_string(),
         installed_dir: installed.map(|d| d.display().to_string()),
@@ -126,10 +176,10 @@ async fn pick_dir(app: AppHandle, current: String) -> Option<String> {
             .and_then(|f| f.into_path().ok())
             // Always install into a dedicated folder.
             .map(|p| {
-                if p.ends_with("OpenLag") {
+                if p.ends_with("Pingless") {
                     p
                 } else {
-                    p.join("OpenLag")
+                    p.join("Pingless")
                 }
             })
             .map(|p| p.display().to_string())
@@ -186,8 +236,9 @@ fn emit(app: &AppHandle, pct: f64, text: impl Into<String>) {
 fn run_install(app: &AppHandle, o: &InstallOptions) -> Result<()> {
     let dir = PathBuf::from(o.dir.trim());
     anyhow::ensure!(dir.is_absolute(), "укажите полный путь к папке установки");
-    emit(app, 1.0, "Закрываю запущенный OpenLag…");
+    emit(app, 1.0, "Закрываю запущенный Pingless…");
     stop_running(&dir);
+    remove_legacy(&dir);
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("не удалось создать {}", dir.display()))?;
 
@@ -219,17 +270,17 @@ fn run_install(app: &AppHandle, o: &InstallOptions) -> Result<()> {
     emit(app, 96.0, "Создаю ярлыки…");
     let target = dir.join(APP_EXE);
     if o.start_menu {
-        shortcut(&start_menu_dir().join("OpenLag.lnk"), &target)?;
+        shortcut(&start_menu_dir().join("Pingless.lnk"), &target)?;
     }
     if o.desktop {
-        shortcut(&public_desktop().join("OpenLag.lnk"), &target)?;
+        shortcut(&public_desktop().join("Pingless.lnk"), &target)?;
     }
     if o.autostart {
         let run = format!("\"{}\" --minimized", target.display());
         let _ = hidden(
             "schtasks",
             &[
-                "/Create", "/TN", "OpenLag", "/TR", &run, "/SC", "ONLOGON", "/RL", "HIGHEST", "/F",
+                "/Create", "/TN", "Pingless", "/TR", &run, "/SC", "ONLOGON", "/RL", "HIGHEST", "/F",
             ],
         );
     }
@@ -264,7 +315,7 @@ fn extract(app: &AppHandle, data: &[u8], dir: &Path, total: u64, done: &mut u64)
             let same = std::fs::read(&path).map(|old| old == buf).unwrap_or(false);
             anyhow::ensure!(
                 same,
-                "не удалось записать {}: {e}. Закройте OpenLag или перезагрузите ПК.",
+                "не удалось записать {}: {e}. Закройте Pingless или перезагрузите ПК.",
                 path.display()
             );
         }
@@ -280,11 +331,11 @@ fn run_uninstall(app: &AppHandle, remove_settings: bool) -> Result<()> {
                 .ok()
                 .and_then(|p| p.parent().map(Path::to_path_buf))
         })
-        .context("OpenLag не найден")?;
-    emit(app, 10.0, "Закрываю OpenLag…");
+        .context("Pingless не найден")?;
+    emit(app, 10.0, "Закрываю Pingless…");
     stop_running(&dir);
     emit(app, 30.0, "Убираю автозапуск и правило брандмауэра…");
-    let _ = hidden("schtasks", &["/Delete", "/TN", "OpenLag", "/F"]);
+    let _ = hidden("schtasks", &["/Delete", "/TN", "Pingless", "/F"]);
     // openlag:// links, registered by the app itself.
     let _ = hidden("reg", &["delete", r"HKCU\Software\Classes\openlag", "/f"]);
     let _ = hidden(
@@ -294,12 +345,12 @@ fn run_uninstall(app: &AppHandle, remove_settings: bool) -> Result<()> {
             "firewall",
             "delete",
             "rule",
-            "name=OpenLag local proxy",
+            "name=Pingless local proxy",
         ],
     );
     emit(app, 50.0, "Удаляю ярлыки…");
-    let _ = std::fs::remove_file(start_menu_dir().join("OpenLag.lnk"));
-    let _ = std::fs::remove_file(public_desktop().join("OpenLag.lnk"));
+    let _ = std::fs::remove_file(start_menu_dir().join("Pingless.lnk"));
+    let _ = std::fs::remove_file(public_desktop().join("Pingless.lnk"));
     let _ =
         winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE).delete_subkey_all(UNINSTALL_KEY);
     emit(app, 70.0, "Удаляю файлы…");
@@ -340,7 +391,7 @@ fn register(dir: &Path, size: u64) -> Result<()> {
     use winreg::enums::HKEY_LOCAL_MACHINE;
     let (key, _) = RegKey::predef(HKEY_LOCAL_MACHINE).create_subkey(UNINSTALL_KEY)?;
     let d = dir.display().to_string();
-    key.set_value("DisplayName", &"OpenLag")?;
+    key.set_value("DisplayName", &"Pingless")?;
     key.set_value("DisplayVersion", &VERSION)?;
     key.set_value("Publisher", &"Del-Iternenko")?;
     key.set_value("URLInfoAbout", &GITHUB)?;
@@ -393,7 +444,7 @@ fn shortcut(lnk: &Path, target: &Path) -> Result<()> {
     let wd = target.parent().unwrap_or(Path::new("."));
     let script = format!(
         "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{}'); $s.TargetPath='{}'; $s.WorkingDirectory='{}'; \
-         $s.IconLocation='{},0'; $s.Description='OpenLag'; $s.Save()",
+         $s.IconLocation='{},0'; $s.Description='Pingless'; $s.Save()",
         q(lnk),
         q(target),
         q(wd),

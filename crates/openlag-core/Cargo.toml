@@ -1,6 +1,6 @@
 [package]
 name = "openlag-core"
-description = "OpenLag client engine: paths, probing, route selection and multipath tunnelling"
+description = "Pingless client engine: paths, probing, route selection and multipath tunnelling"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
