@@ -110,5 +110,6 @@ mod priority_tests {
                 .any(|(p, n)| *p == pid && n == "ping.exe")
         );
         let _ = child.kill();
+        let _ = child.wait();
     }
 }
