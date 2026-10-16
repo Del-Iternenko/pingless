@@ -39,6 +39,7 @@ async fn main() -> anyhow::Result<()> {
     println!("bind interface: {bind:?}");
     let opts = XrayOptions {
         bind_interface: bind.map(|i| i.name),
+        ..Default::default()
     };
     let x = Xray::start_with(
         &xray_exe,

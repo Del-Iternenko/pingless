@@ -222,8 +222,17 @@ impl AppState {
             } else {
                 None
             };
+            let c = &s.conn;
             let opts = XrayOptions {
                 bind_interface: net.bind_interface.clone(),
+                fingerprint: Some(c.fingerprint.clone()).filter(|f| !f.is_empty()),
+                fragment: c.fragment.then(|| openlag_proxy::Fragment {
+                    packets: c.frag_packets.clone(),
+                    length: c.frag_length.clone(),
+                    interval: c.frag_interval.clone(),
+                }),
+                mux_concurrency: c.mux.min(128),
+                dns: Some(c.dns.clone()).filter(|d| !d.is_empty()),
             };
             let xray = Xray::start_with(exe, &self.work_dir.join("xray"), &servers, &opts).await?;
             for (i, key) in keys.iter().enumerate() {
@@ -254,6 +263,7 @@ impl AppState {
             exits: relays.exits,
             proxies,
             preferred_exit: s.preferred_exit.clone(),
+            proxy_probe_target: s.conn.probe_target.parse().ok(),
             multipath: s.multipath.max(1),
             probe_interval_ms: s.probe_interval_ms.clamp(100, 5000),
             switch_margin_ms: 5.0,
@@ -1001,6 +1011,7 @@ fn main() {
             pick_key_file,
             open_url,
             set_kill_switch,
+            set_conn,
             start_page,
         ])
         .build(tauri::generate_context!())
@@ -1462,5 +1473,16 @@ async fn set_kill_switch(st: Shared<'_>, on: bool) -> CmdResult<()> {
         st.stop_capture(&mut net);
         st.start_capture(&mut net).map_err(err)?;
     }
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_conn(st: Shared<'_>, conn: settings::ConnPrefs) -> CmdResult<()> {
+    if !conn.probe_target.is_empty() && conn.probe_target.parse::<std::net::SocketAddr>().is_err() {
+        return Err("probe target must look like 1.1.1.1:53".into());
+    }
+    st.settings.lock().conn = conn;
+    st.save().map_err(err)?;
+    st.rebuild().await;
     Ok(())
 }

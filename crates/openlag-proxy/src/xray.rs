@@ -73,6 +73,28 @@ pub struct XrayOptions {
     /// Send traffic to the servers through this interface (friendly name), bypassing
     /// TUN adapters of other VPN clients.
     pub bind_interface: Option<String>,
+    /// uTLS fingerprint for TLS and REALITY ("chrome", "firefox", "randomized"...);
+    /// None keeps what the subscription says.
+    pub fingerprint: Option<String>,
+    /// Split the TLS ClientHello into small TCP pieces to slip past DPI that blocks
+    /// by SNI.
+    pub fragment: Option<Fragment>,
+    /// Multiplex TCP connections over one (mux.cool); 0 = off. Never applied to
+    /// XTLS Vision, which does not support it.
+    pub mux_concurrency: u32,
+    /// DNS used to resolve server addresses, e.g. "https://1.1.1.1/dns-query";
+    /// None = system resolver.
+    pub dns: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Fragment {
+    /// "tlshello" or a packet range such as "1-3".
+    pub packets: String,
+    /// Piece size range in bytes, e.g. "100-200".
+    pub length: String,
+    /// Pause between pieces in ms, e.g. "10-20".
+    pub interval: String,
 }
 
 /// Xray config with one SOCKS inbound per server, routed to that server only.
@@ -94,22 +116,62 @@ pub fn build_config_with(servers: &[(ProxyServer, u16)], opts: &XrayOptions) -> 
         }));
         let mut out = server.outbound.clone();
         out["tag"] = json!(format!("out-{i}"));
-        if let Some(iface) = &opts.bind_interface {
-            if !out.get("streamSettings").is_some_and(Value::is_object) {
-                out["streamSettings"] = json!({});
+        if !out.get("streamSettings").is_some_and(Value::is_object) {
+            out["streamSettings"] = json!({});
+        }
+        let st = &mut out["streamSettings"];
+        if let Some(fp) = &opts.fingerprint {
+            for key in ["tlsSettings", "realitySettings"] {
+                if st.get(key).is_some_and(Value::is_object) {
+                    st[key]["fingerprint"] = json!(fp);
+                }
             }
-            out["streamSettings"]["sockopt"]["interface"] = json!(iface);
+        }
+        if opts.fragment.is_some() {
+            // The fragment outbound dials for us (and carries the interface binding).
+            st["sockopt"]["dialerProxy"] = json!("fragment");
+        } else if let Some(iface) = &opts.bind_interface {
+            st["sockopt"]["interface"] = json!(iface);
+        }
+        if opts.dns.is_some() {
+            st["sockopt"]["domainStrategy"] = json!("UseIPv4");
+        }
+        let vision = out
+            .pointer("/settings/vnext/0/users/0/flow")
+            .and_then(Value::as_str)
+            .is_some_and(|f| !f.is_empty());
+        if opts.mux_concurrency > 0 && !vision {
+            out["mux"] = json!({ "enabled": true, "concurrency": opts.mux_concurrency, "xudpConcurrency": 16, "xudpProxyUDP443": "skip" });
         }
         outbounds.push(out);
         rules.push(json!({ "type": "field", "inboundTag": [format!("in-{i}")], "outboundTag": format!("out-{i}") }));
     }
+    if let Some(f) = &opts.fragment {
+        let mut frag = json!({
+            "tag": "fragment",
+            "protocol": "freedom",
+            "settings": { "fragment": { "packets": f.packets, "length": f.length, "interval": f.interval } },
+            "streamSettings": { "sockopt": { "tcpNoDelay": true } },
+        });
+        if let Some(iface) = &opts.bind_interface {
+            frag["streamSettings"]["sockopt"]["interface"] = json!(iface);
+        }
+        if opts.dns.is_some() {
+            frag["settings"]["domainStrategy"] = json!("UseIPv4");
+        }
+        outbounds.push(frag);
+    }
     outbounds.push(json!({ "tag": "block", "protocol": "blackhole" }));
-    json!({
+    let mut cfg = json!({
         "log": { "loglevel": "warning" },
         "inbounds": inbounds,
         "outbounds": outbounds,
         "routing": { "rules": rules },
-    })
+    });
+    if let Some(dns) = &opts.dns {
+        cfg["dns"] = json!({ "servers": [dns], "queryStrategy": "UseIPv4" });
+    }
+    cfg
 }
 
 /// A running xray process. Killed when dropped, and by Windows if we crash.

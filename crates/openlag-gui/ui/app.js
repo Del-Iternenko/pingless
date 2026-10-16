@@ -719,6 +719,16 @@ function renderSettings() {
     $("opt-minimized").checked = s.start_minimized;
     $("opt-tray").checked = s.close_to_tray;
     $("opt-kill").checked = s.kill_switch;
+    const c = s.conn;
+    $("conn-fp").value = c.fingerprint;
+    $("conn-frag").checked = c.fragment;
+    $("conn-frag-packets").value = c.frag_packets;
+    $("conn-frag-length").value = c.frag_length;
+    $("conn-frag-interval").value = c.frag_interval;
+    $("conn-mux").value = String(c.mux);
+    $("conn-dns").value = c.dns;
+    $("conn-probe").value = c.probe_target;
+    $("conn-frag-row").hidden = !c.fragment;
     $("opt-update").checked = s.auto_update;
     $("opt-probe").value = String(s.probe_interval_ms);
     $("ui-chart").value = String(s.ui.chart_seconds);
@@ -762,6 +772,21 @@ $("startup-save").addEventListener("click", async () => {
   try {
     await call("set_startup", { autostart: $("opt-autostart").checked, startMinimized: $("opt-minimized").checked, probeMs: Number($("opt-probe").value), closeToTray: $("opt-tray").checked, autoUpdate: $("opt-update").checked }, "Сохранено");
   } catch { /* toast */ }
+  await refreshState();
+});
+$("conn-frag").addEventListener("change", (e) => ($("conn-frag-row").hidden = !e.target.checked));
+$("conn-save").addEventListener("click", async () => {
+  const conn = {
+    fingerprint: $("conn-fp").value,
+    fragment: $("conn-frag").checked,
+    frag_packets: $("conn-frag-packets").value.trim() || "tlshello",
+    frag_length: $("conn-frag-length").value.trim() || "100-200",
+    frag_interval: $("conn-frag-interval").value.trim() || "10-20",
+    mux: Number($("conn-mux").value),
+    dns: $("conn-dns").value,
+    probe_target: $("conn-probe").value,
+  };
+  try { await call("set_conn", { conn }, "Применено: серверы перезапущены"); } catch { /* toast */ }
   await refreshState();
 });
 $("opt-kill").addEventListener("change", async (e) => {

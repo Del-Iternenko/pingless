@@ -86,6 +86,7 @@ async fn udp_through_vless_server() {
                 socks,
             }],
             preferred_exit: None,
+            proxy_probe_target: None,
             multipath: 1,
             probe_interval_ms: 250,
             switch_margin_ms: 5.0,

@@ -657,7 +657,7 @@ impl Inner {
                 tokio::select! {
                     _ = tick.tick() => {
                         txid = txid.wrapping_add(1);
-                        socks::encode(PROXY_PROBE_TARGET, &socks::dns_probe(txid), &mut out);
+                        socks::encode(self.cfg.proxy_probe_target.unwrap_or(PROXY_PROBE_TARGET), &socks::dns_probe(txid), &mut out);
                         if warmup > 0 {
                             warmup -= 1;
                         } else {

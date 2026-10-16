@@ -45,6 +45,8 @@ pub struct Settings {
     /// Look for new releases on GitHub.
     pub auto_update: bool,
     pub ui: UiPrefs,
+    /// How xray connects to the VPN servers.
+    pub conn: ConnPrefs,
     /// Saved SSH servers for the terminal tab.
     pub ssh_hosts: Vec<crate::term::SshHost>,
     /// Pre-groups versions stored a flat list here; migrated on load.
@@ -81,6 +83,7 @@ impl Default for Settings {
             kill_switch: false,
             auto_update: true,
             ui: UiPrefs::default(),
+            conn: ConnPrefs::default(),
             ssh_hosts: Vec::new(),
             games: Vec::new(),
             multipath: 2,
@@ -94,6 +97,41 @@ impl Default for Settings {
                 rand::random::<u64>(),
                 rand::random::<u64>()
             ),
+        }
+    }
+}
+
+/// Connection options applied to every VPN server (like the advanced settings of
+/// Happ or v2rayN).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConnPrefs {
+    /// uTLS fingerprint override; empty = as in the subscription.
+    pub fingerprint: String,
+    /// Fragment the TLS ClientHello to get past DPI.
+    pub fragment: bool,
+    pub frag_packets: String,
+    pub frag_length: String,
+    pub frag_interval: String,
+    /// mux.cool concurrency; 0 = off (best for games).
+    pub mux: u32,
+    /// DoH URL used to resolve server addresses; empty = system DNS.
+    pub dns: String,
+    /// "ip:port" of the DNS server the latency probes query.
+    pub probe_target: String,
+}
+
+impl Default for ConnPrefs {
+    fn default() -> Self {
+        ConnPrefs {
+            fingerprint: String::new(),
+            fragment: false,
+            frag_packets: "tlshello".into(),
+            frag_length: "100-200".into(),
+            frag_interval: "10-20".into(),
+            mux: 0,
+            dns: String::new(),
+            probe_target: "1.1.1.1:53".into(),
         }
     }
 }

@@ -15,4 +15,4 @@ pub use amnezia::decode_key as decode_amnezia_key;
 pub use link::{ProxyServer, parse_link};
 pub use netif::{NetInterface, physical_interface};
 pub use subscription::{FetchOptions, Parsed, Skipped, SubscriptionInfo, fetch, parse_text};
-pub use xray::{Xray, XrayOptions, build_config, build_config_with, server_from_config};
+pub use xray::{Fragment, Xray, XrayOptions, build_config, build_config_with, server_from_config};

@@ -16,6 +16,10 @@ pub struct EngineConfig {
     /// Exit (relay or proxy name) to use while it is alive.
     #[serde(default)]
     pub preferred_exit: Option<String>,
+    /// DNS server the proxy latency probes query through each VPN server
+    /// (default 1.1.1.1:53).
+    #[serde(default)]
+    pub proxy_probe_target: Option<SocketAddr>,
     /// How many routes to the chosen exit carry each packet at the same time.
     /// 1 disables multipath.
     #[serde(default = "default_multipath")]

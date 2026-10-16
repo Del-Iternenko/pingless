@@ -112,6 +112,7 @@ fn config(routes: Vec<RouteSpec>, multipath: usize) -> EngineConfig {
         }],
         proxies: vec![],
         preferred_exit: None,
+        proxy_probe_target: None,
         multipath,
         probe_interval_ms: 50,
         switch_margin_ms: 5.0,

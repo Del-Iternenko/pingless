@@ -251,6 +251,41 @@
         <div class="row end"><button class="btn primary" id="opt-save">Сохранить</button></div>
       </div>
       <div class="card form">
+        <div class="card-head"><h3>Подключение к VPN-серверам</h3></div>
+        <label class="field">
+          <span>TLS-отпечаток (uTLS)</span>
+          <select id="conn-fp">
+            <option value="">Как в подписке</option><option value="chrome">Chrome</option><option value="firefox">Firefox</option><option value="safari">Safari</option><option value="edge">Edge</option><option value="ios">iOS</option><option value="android">Android</option><option value="randomized">Случайный</option>
+          </select>
+          <small>Под какой браузер маскируется TLS-рукопожатие с сервером.</small>
+        </label>
+        <label class="field check">
+          <input type="checkbox" id="conn-frag">
+          <span>Фрагментация TLS (обход DPI)<small>Первый пакет TLS режется на куски, и DPI провайдера не может прочитать имя сайта. Помогает, когда серверы «пропадают» у некоторых провайдеров. Чуть замедляет установку соединения.</small></span>
+        </label>
+        <div class="row" id="conn-frag-row">
+          <label class="field" style="flex:1"><span>Пакеты</span><input id="conn-frag-packets"></label>
+          <label class="field" style="flex:1"><span>Размер куска, байт</span><input id="conn-frag-length"></label>
+          <label class="field" style="flex:1"><span>Пауза, мс</span><input id="conn-frag-interval"></label>
+        </div>
+        <label class="field">
+          <span>Mux (мультиплексирование TCP)</span>
+          <select id="conn-mux"><option value="0">Выключен (лучше для игр)</option><option value="4">4 потока</option><option value="8">8 потоков</option><option value="16">16 потоков</option></select>
+          <small>Несколько TCP-соединений идут внутри одного: меньше рукопожатий для браузера, но для игр лучше выключить. Не применяется к XTLS Vision.</small>
+        </label>
+        <label class="field">
+          <span>DNS для адресов серверов</span>
+          <select id="conn-dns"><option value="">Системный</option><option value="https://1.1.1.1/dns-query">Cloudflare DoH</option><option value="https://8.8.8.8/dns-query">Google DoH</option><option value="https://9.9.9.9/dns-query">Quad9 DoH</option><option value="https://77.88.8.8/dns-query">Яндекс DoH</option></select>
+          <small>Через что OpenLag узнаёт IP серверов из подписки. DoH прячет запросы от провайдера.</small>
+        </label>
+        <label class="field">
+          <span>Цель замера пинга через серверы</span>
+          <select id="conn-probe"><option value="1.1.1.1:53">Cloudflare 1.1.1.1</option><option value="8.8.8.8:53">Google 8.8.8.8</option><option value="9.9.9.9:53">Quad9 9.9.9.9</option><option value="77.88.8.8:53">Яндекс 77.88.8.8</option></select>
+          <small>Пинг сервера = время DNS-запроса к этому адресу через сам сервер по UDP.</small>
+        </label>
+        <div class="row end"><button class="btn primary" id="conn-save">Применить</button></div>
+      </div>
+      <div class="card form">
         <div class="card-head"><h3>Оформление</h3></div>
         <div class="field">
           <span>Цвет акцента</span>

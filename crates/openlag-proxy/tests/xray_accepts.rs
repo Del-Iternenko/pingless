@@ -50,3 +50,29 @@ async fn broken_server_does_not_block_others() {
     drop(x);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test]
+async fn xray_accepts_advanced_options() {
+    let Some(xray) = xray_path() else { return };
+    let servers: Vec<_> = LINKS.iter().map(|l| parse_link(l).unwrap()).collect();
+    let opts = openlag_proxy::XrayOptions {
+        bind_interface: None,
+        fingerprint: Some("firefox".into()),
+        fragment: Some(openlag_proxy::Fragment {
+            packets: "tlshello".into(),
+            length: "100-200".into(),
+            interval: "10-20".into(),
+        }),
+        mux_concurrency: 8,
+        dns: Some("https://1.1.1.1/dns-query".into()),
+    };
+    let dir = std::env::temp_dir().join(format!("openlag-xray-test3-{}", std::process::id()));
+    let x = Xray::start_with(&xray, &dir, &servers, &opts)
+        .await
+        .unwrap();
+    for (s, e) in servers.iter().zip(&x.errors) {
+        assert!(e.is_none(), "{}: {}", s.name, e.as_deref().unwrap_or(""));
+    }
+    drop(x);
+    let _ = std::fs::remove_dir_all(dir);
+}
