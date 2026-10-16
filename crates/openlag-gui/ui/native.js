@@ -12,6 +12,9 @@
   });
 
   const blocked = (e) => {
+    // Inside the terminal every key belongs to the shell (Ctrl+R, Ctrl+L, F5 in mc...);
+    // xterm.js cancels the browser action for keys it handles.
+    if (e.target.closest?.(".xterm")) return false;
     const k = e.key.toLowerCase();
     const ctrl = e.ctrlKey || e.metaKey;
     if (["f3", "f5", "f7", "f12", "browserback", "browserforward", "browserrefresh", "browserhome"].includes(k)) return true;

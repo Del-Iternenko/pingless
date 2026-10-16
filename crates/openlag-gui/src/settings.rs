@@ -42,6 +42,8 @@ pub struct Settings {
     /// Look for new releases on GitHub.
     pub auto_update: bool,
     pub ui: UiPrefs,
+    /// Saved SSH servers for the terminal tab.
+    pub ssh_hosts: Vec<crate::term::SshHost>,
     /// Pre-groups versions stored a flat list here; migrated on load.
     #[serde(skip_serializing)]
     games: Vec<String>,
@@ -75,6 +77,7 @@ impl Default for Settings {
             close_to_tray: true,
             auto_update: true,
             ui: UiPrefs::default(),
+            ssh_hosts: Vec::new(),
             games: Vec::new(),
             multipath: 2,
             tunnel_existing: false,

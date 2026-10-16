@@ -166,6 +166,7 @@ document.querySelectorAll(".nav").forEach((b) =>
     document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${b.dataset.page}`));
     if (b.dataset.page !== "fun") Fun.hide();
     if (b.dataset.page === "procs") loadProcesses();
+    if (b.dataset.page === "term" && window.Term) Term.focus();
     renderAll();
   }),
 );
@@ -771,6 +772,7 @@ function renderAll() {
   if (page === "page-subs") renderSubs();
   if (page === "page-procs") renderProcsPage();
   if (page === "page-settings") renderSettings();
+  if (page === "page-term" && window.Term) Term.render(state);
 }
 
 // ---------------------------------------------------------------- updates
@@ -872,7 +874,10 @@ Fun.init();
 // no half-drawn page, like a native app.
 refreshState().finally(async () => {
   const page = await invoke("start_page").catch(() => null);
-  if (page) document.querySelector(`.nav[data-page="${page}"]`)?.click();
+  if (page) document.querySelector(`.nav[data-page="${page.split(":")[0]}"]`)?.click();
+  // Development aid: OPENLAG_START_PAGE=term:powershell also opens a shell.
+  const shell = page?.split(":")[1];
+  if (shell) document.querySelector(`[data-shell="${shell}"]`)?.click();
   invoke("ui_ready");
 });
 // Pick up background changes (auto-refresh, xray restarts).

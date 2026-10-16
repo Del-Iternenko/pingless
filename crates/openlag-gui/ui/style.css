@@ -297,3 +297,34 @@ img, svg, canvas { -webkit-user-drag: none; }
 .srv-group .flag { margin-right: 0; }
 
 .kpi-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+/* Terminal */
+.page.page-wide { max-width: none; height: 100%; }
+main:has(#page-term.active) { padding: 0; overflow: hidden; }
+.term-layout { display: grid; grid-template-columns: 270px minmax(0, 1fr); height: 100%; min-height: 0; flex: 1; }
+.term-side { border-right: 1px solid var(--border); padding: 18px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.shells { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.shells .btn { justify-content: center; padding: 0 8px; }
+.ssh-list { display: flex; flex-direction: column; gap: 6px; }
+.ssh-host { display: flex; gap: 6px; }
+.ssh-connect { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; text-align: left; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--surface-2); transition: border-color 150ms; }
+.ssh-connect:hover { border-color: var(--accent); }
+.ssh-connect span { min-width: 0; display: flex; flex-direction: column; }
+.ssh-connect b, .ssh-connect small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssh-connect small { color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+.ssh-form { gap: 10px; margin-top: 8px; padding: 14px; }
+.ssh-form .field input, .ssh-form .field select { max-width: none; width: 100%; }
+.term-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.term-tabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--border); min-height: 41px; overflow-x: auto; }
+.term-tab { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px 0 14px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; background: transparent; color: var(--muted); white-space: nowrap; }
+.term-tab.active { background: var(--bg); color: var(--text); border-color: var(--border); }
+.term-tab.ended span { text-decoration: line-through; opacity: 0.6; }
+.term-tab i { font-style: normal; width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center; }
+.term-tab i:hover { background: rgba(255, 255, 255, 0.1); }
+.term-panes { position: relative; flex: 1; min-height: 0; background: var(--bg); }
+.term-pane { position: absolute; inset: 8px 4px 4px 12px; }
+.term-pane[hidden] { display: none; }
+.term-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; color: var(--muted); text-align: center; }
+.term-empty .ic { width: 42px; height: 42px; stroke-width: 1.5; }
+.term-credit { padding: 4px 14px 6px; font-size: 10.5px; color: var(--muted); border-top: 1px solid var(--border); }
+.term-credit a { color: var(--muted); text-decoration: underline; }

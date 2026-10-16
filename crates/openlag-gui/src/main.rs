@@ -2,8 +2,10 @@
 
 mod compare;
 mod geo;
+mod secret;
 mod settings;
 mod sys;
+mod term;
 mod tray;
 mod update;
 
@@ -35,6 +37,7 @@ struct AppState {
     app: std::sync::OnceLock<tauri::AppHandle>,
     /// Direct (no tunnel) ping to the game servers currently tunnelled.
     compare: parking_lot::Mutex<compare::Comparator>,
+    terminals: Arc<term::Terminals>,
 }
 
 #[derive(Default)]
@@ -381,6 +384,7 @@ impl AppState {
     }
 
     async fn shutdown(&self) {
+        self.terminals.close_all();
         let mut net = self.net.lock().await;
         self.stop_capture(&mut net);
         net.engine = None;
@@ -870,6 +874,7 @@ fn main() {
                 geo_path: data_dir.join("geo.json"),
                 app: std::sync::OnceLock::new(),
                 compare: parking_lot::Mutex::default(),
+                terminals: Arc::default(),
             });
             let _ = state.app.set(app.handle().clone());
             let _ = state.save(); // persist the generated device id
@@ -971,6 +976,16 @@ fn main() {
             check_update,
             install_update,
             ui_ready,
+            term_open_local,
+            term_open_ssh,
+            term_write,
+            term_resize,
+            term_close,
+            ssh_save,
+            ssh_delete,
+            ssh_forget_key,
+            pick_key_file,
+            open_url,
             start_page,
         ])
         .build(tauri::generate_context!())
@@ -1258,5 +1273,166 @@ async fn compare_loop(st: Arc<AppState>) {
             .await
             .unwrap_or_default();
         st.compare.lock().record(results);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Terminal
+
+fn known_hosts_path(st: &AppState) -> PathBuf {
+    st.work_dir.join("known_hosts.json")
+}
+
+#[tauri::command]
+fn term_open_local(
+    app: tauri::AppHandle,
+    st: Shared<'_>,
+    shell: String,
+    cols: u16,
+    rows: u16,
+) -> CmdResult<u32> {
+    st.terminals
+        .open_local(&app, &shell, cols, rows)
+        .map_err(err)
+}
+
+#[tauri::command]
+fn term_open_ssh(
+    app: tauri::AppHandle,
+    st: Shared<'_>,
+    id: String,
+    cols: u16,
+    rows: u16,
+) -> CmdResult<u32> {
+    let host = st
+        .settings
+        .lock()
+        .ssh_hosts
+        .iter()
+        .find(|h| h.id == id)
+        .cloned()
+        .ok_or("server not found")?;
+    let password = secret::unprotect(&host.secret).map_err(err)?;
+    st.terminals
+        .open_ssh(&app, host, password, known_hosts_path(&st), cols, rows)
+        .map_err(err)
+}
+
+#[tauri::command]
+fn term_write(st: Shared<'_>, id: u32, data: String) -> CmdResult<()> {
+    st.terminals.write(id, data.as_bytes()).map_err(err)
+}
+
+#[tauri::command]
+fn term_resize(st: Shared<'_>, id: u32, cols: u16, rows: u16) -> CmdResult<()> {
+    st.terminals.resize(id, cols, rows).map_err(err)
+}
+
+#[tauri::command]
+fn term_close(st: Shared<'_>, id: u32) {
+    st.terminals.close(id);
+}
+
+#[derive(serde::Deserialize)]
+struct SshInput {
+    id: Option<String>,
+    name: String,
+    host: String,
+    port: u16,
+    user: String,
+    auth: String,
+    key_path: String,
+    /// New password or passphrase; None keeps the saved one.
+    secret: Option<String>,
+}
+
+#[tauri::command]
+fn ssh_save(st: Shared<'_>, input: SshInput) -> CmdResult<String> {
+    if input.host.trim().is_empty() || input.user.trim().is_empty() {
+        return Err("host and user are required".into());
+    }
+    let mut s = st.settings.lock();
+    let id = input
+        .id
+        .filter(|i| !i.is_empty())
+        .unwrap_or_else(settings::new_id);
+    let old = s
+        .ssh_hosts
+        .iter()
+        .find(|h| h.id == id)
+        .map(|h| h.secret.clone())
+        .unwrap_or_default();
+    let secret = match input.secret {
+        Some(plain) => secret::protect(&plain).map_err(err)?,
+        None => old,
+    };
+    let host = term::SshHost {
+        id: id.clone(),
+        name: if input.name.trim().is_empty() {
+            input.host.trim().to_string()
+        } else {
+            input.name.trim().to_string()
+        },
+        host: input.host.trim().to_string(),
+        port: if input.port == 0 { 22 } else { input.port },
+        user: input.user.trim().to_string(),
+        auth: if input.auth == "key" {
+            "key".into()
+        } else {
+            "password".into()
+        },
+        key_path: input.key_path.trim().to_string(),
+        secret,
+    };
+    match s.ssh_hosts.iter_mut().find(|h| h.id == id) {
+        Some(h) => *h = host,
+        None => s.ssh_hosts.push(host),
+    }
+    drop(s);
+    st.save().map_err(err)?;
+    Ok(id)
+}
+
+#[tauri::command]
+fn ssh_delete(st: Shared<'_>, id: String) -> CmdResult<()> {
+    st.settings.lock().ssh_hosts.retain(|h| h.id != id);
+    st.save().map_err(err)
+}
+
+/// Forgets the remembered key of a server (after it was reinstalled).
+#[tauri::command]
+fn ssh_forget_key(st: Shared<'_>, host: String, port: u16) -> CmdResult<()> {
+    let path = known_hosts_path(&st);
+    let mut known: HashMap<String, String> = std::fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    known.remove(&format!("{host}:{port}"));
+    std::fs::write(&path, serde_json::to_vec_pretty(&known).unwrap_or_default())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn pick_key_file(app: tauri::AppHandle) -> CmdResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        let mut d = app.dialog().file().set_title("Приватный SSH-ключ");
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            d = d.set_directory(PathBuf::from(home).join(".ssh"));
+        }
+        d.blocking_pick_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(picked
+        .and_then(|f| f.into_path().ok())
+        .map(|p| p.display().to_string()))
+}
+
+/// Opens an https link in the default browser.
+#[tauri::command]
+fn open_url(url: String) {
+    if url.starts_with("https://") {
+        sys::open_url(&url);
     }
 }
