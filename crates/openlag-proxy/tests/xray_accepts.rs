@@ -17,6 +17,7 @@ const LINKS: &[&str] = &[
     "vless://11111111-2222-4333-8444-555555555555@g.example.com:443?type=grpc&security=tls&serviceName=svc#grpc",
     "trojan://password@t.example.com:443?sni=t.example.com#trojan",
     "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpzZWNyZXQ@1.2.3.4:8388#ss",
+    "wireguard://yAnz5TF%2BlXXJte14tji3zlMNq%2Bhd2rYUIgJBgB3fBmk%3D@203.0.113.5:51820?publickey=xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg%3D&address=10.0.0.2%2F32,fd00::2%2F128&mtu=1420#wg",
 ];
 
 #[tokio::test]

@@ -16,9 +16,21 @@ use tokio::net::{TcpStream, UdpSocket};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let settings: serde_json::Value = serde_json::from_slice(&std::fs::read(&args[0])?)?;
+    let raw = std::fs::read(&args[0])?;
     let filters: Vec<String> = args[1..].iter().map(|s| s.to_lowercase()).collect();
     let mut servers: Vec<ProxyServer> = Vec::new();
+    // Not OpenLag settings: links, a WireGuard .conf, an Amnezia key...
+    let settings: serde_json::Value = match serde_json::from_slice::<serde_json::Value>(&raw) {
+        Ok(v) if v.get("subscriptions").is_some() => v,
+        _ => {
+            let parsed = openlag_proxy::parse_text(&String::from_utf8_lossy(&raw));
+            for s in &parsed.skipped {
+                println!("skipped {}: {}", s.entry, s.reason);
+            }
+            servers = parsed.servers;
+            serde_json::json!({ "subscriptions": [] })
+        }
+    };
     for sub in settings["subscriptions"].as_array().unwrap() {
         for s in sub["servers"].as_array().unwrap() {
             let s: ProxyServer = serde_json::from_value(s.clone())?;

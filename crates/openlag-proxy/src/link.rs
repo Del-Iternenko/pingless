@@ -41,7 +41,8 @@ pub fn parse_link(link: &str) -> Result<ProxyServer> {
         "trojan" => parse_vless_trojan(link, "trojan"),
         "vmess" => parse_vmess(link),
         "ss" => parse_ss(link),
-        "hysteria2" | "hy2" | "tuic" | "wireguard" | "socks" | "http" | "https" => {
+        "wireguard" | "wg" => crate::wireguard::parse_link(link),
+        "hysteria2" | "hy2" | "tuic" | "socks" | "http" | "https" => {
             bail!("{scheme}:// is not supported yet")
         }
         _ => bail!("unknown link type {scheme}://"),
@@ -50,15 +51,15 @@ pub fn parse_link(link: &str) -> Result<ProxyServer> {
 
 /// Splits `scheme://userinfo@host:port?query#fragment` without assuming a URL crate's
 /// opinion on unusual hosts.
-struct Parts {
-    user: String,
-    host: String,
-    port: u16,
-    query: HashMap<String, String>,
-    name: String,
+pub(crate) struct Parts {
+    pub user: String,
+    pub host: String,
+    pub port: u16,
+    pub query: HashMap<String, String>,
+    pub name: String,
 }
 
-fn split(link: &str) -> Result<Parts> {
+pub(crate) fn split(link: &str) -> Result<Parts> {
     let rest = link.split_once("://").map(|(_, r)| r).unwrap_or(link);
     let (rest, name) = match rest.split_once('#') {
         Some((r, f)) => (r, decode(f)),
@@ -130,7 +131,7 @@ pub(crate) fn b64(s: &str) -> Result<Vec<u8>> {
     bail!("invalid base64")
 }
 
-fn display_name(name: &str, host: &str, port: u16) -> String {
+pub(crate) fn display_name(name: &str, host: &str, port: u16) -> String {
     if name.trim().is_empty() {
         format!("{host}:{port}")
     } else {

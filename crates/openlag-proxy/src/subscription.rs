@@ -105,6 +105,16 @@ pub fn parse_text(text: &str) -> Parsed {
     if text.is_empty() {
         return out;
     }
+    if crate::wireguard::is_conf(text) {
+        match crate::wireguard::parse_conf(text, "") {
+            Ok(s) => out.servers.push(s),
+            Err(e) => out.skipped.push(Skipped {
+                entry: "WireGuard".into(),
+                reason: format!("{e:#}"),
+            }),
+        }
+        return out;
+    }
     if text.starts_with('{') || text.starts_with('[') {
         match serde_json::from_str::<Value>(text) {
             Ok(v) => {

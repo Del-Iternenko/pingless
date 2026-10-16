@@ -542,6 +542,14 @@ function renderSubs() {
   });
 }
 
+$("sub-file").addEventListener("click", async () => {
+  try {
+    const text = await call("pick_config_file");
+    if (text == null) return;
+    $("sub-input").value = text;
+    $("sub-add").click();
+  } catch { /* toast */ }
+});
 $("sub-add").addEventListener("click", async () => {
   const input = $("sub-input").value;
   if (!input.trim()) return toast("Вставьте ссылку или ключи", "error");

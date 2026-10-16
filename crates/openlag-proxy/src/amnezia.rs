@@ -36,11 +36,13 @@ pub fn parse_key(key: &str) -> Result<ProxyServer> {
             return crate::xray::server_from_config(&cfg, &name);
         }
     }
-    if kinds
-        .iter()
-        .any(|k| k == "amnezia-awg" || k == "amnezia-wireguard")
-    {
-        bail!("AmneziaWG keys are not supported yet (planned)");
+    if let Some(c) = containers.iter().find(|c| {
+        matches!(
+            c.get("container").and_then(Value::as_str),
+            Some("amnezia-awg" | "amnezia-wireguard")
+        )
+    }) {
+        return crate::wireguard::from_amnezia(c, &name);
     }
     bail!(
         "no supported protocol in this key (found: {})",
@@ -97,9 +99,20 @@ mod tests {
     }
 
     #[test]
-    fn awg_reports_planned() {
-        let json = r#"{"containers":[{"container":"amnezia-awg","awg":{}}]}"#;
-        let err = parse_key(&make_key(json)).unwrap_err().to_string();
-        assert!(err.contains("AmneziaWG"), "{err}");
+    fn wireguard_container() {
+        let conf = "[Interface]\nPrivateKey = $WIREGUARD_CLIENT_PRIVATE_KEY\nAddress = 10.8.1.2/32\nS1 = 0\nS2 = 0\nH1 = 1\nH2 = 2\nH3 = 3\nH4 = 4\n[Peer]\nPublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\nEndpoint = $SERVER_IP_ADDRESS:$SERVER_PORT\n";
+        let last = serde_json::json!({
+            "config": conf,
+            "hostName": "198.51.100.9",
+            "port": 32123,
+            "client_priv_key": "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=",
+        });
+        let json = serde_json::json!({
+            "description": "AWG",
+            "containers": [{ "container": "amnezia-awg", "awg": { "last_config": last.to_string() } }]
+        });
+        let s = parse_key(&make_key(&json.to_string())).unwrap();
+        assert_eq!((s.address.as_str(), s.port), ("198.51.100.9", 32123));
+        assert_eq!(s.protocol, "wireguard");
     }
 }

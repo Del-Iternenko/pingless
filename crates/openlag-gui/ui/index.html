@@ -145,9 +145,10 @@
       <div class="page-head"><h2>Подписки</h2></div>
       <div class="card">
         <label class="label" for="sub-input">Ссылка на подписку или ключи</label>
-        <textarea id="sub-input" rows="3" placeholder="https://… (Happ, Incy, Marzban, Remnawave)&#10;vless://…  vmess://…  trojan://…  ss://…&#10;vpn://… (Amnezia, протокол Xray)"></textarea>
+        <textarea id="sub-input" rows="3" placeholder="https://… (Happ, Incy, Marzban, Remnawave)&#10;vless://…  vmess://…  trojan://…  ss://…&#10;vpn://… (Amnezia: Xray или WireGuard)&#10;wireguard://…  или текст .conf WireGuard"></textarea>
         <div class="row space">
           <span class="hint">Ссылку на подписку даёт VPN-сервис: в личном кабинете или в Telegram-боте, обычно кнопка «Подключить» или «Скопировать ссылку».</span>
+          <button class="btn" id="sub-file">Из файла…</button>
           <button class="btn primary" id="sub-add"><svg class="ic"><use href="#i-plus"/></svg>Добавить</button>
         </div>
       </div>

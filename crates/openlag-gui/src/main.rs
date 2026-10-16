@@ -718,6 +718,31 @@ fn exe_name(s: &str) -> String {
     }
 }
 
+/// A WireGuard `.conf`, a list of links or an Amnezia key saved to a file.
+#[tauri::command]
+async fn pick_config_file(app: tauri::AppHandle) -> CmdResult<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let file = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("Файл с ключами или конфигом")
+            .add_filter("Конфиги", &["conf", "txt", "json", "vpn"])
+            .add_filter("Все файлы", &["*"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some(path) = file.and_then(|f| f.into_path().ok()) else {
+        return Ok(None);
+    };
+    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    if meta.len() > 4 << 20 {
+        return Err("файл больше 4 МБ: это не конфиг".into());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+}
+
 #[tauri::command]
 async fn pick_exe(app: tauri::AppHandle) -> CmdResult<Vec<String>> {
     use tauri_plugin_dialog::DialogExt;
@@ -985,6 +1010,7 @@ fn main() {
             set_preferred,
             set_selection,
             pick_exe,
+            pick_config_file,
             set_options,
             set_relays,
             set_server_enabled,
