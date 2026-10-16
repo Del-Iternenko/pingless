@@ -224,6 +224,7 @@ function renderAlerts() {
 }
 
 function renderHome() {
+  renderQuick();
   const on = !!tick?.capturing || !!state.capturing;
   $("power").classList.toggle("on", on);
   $("power").classList.toggle("busy", busy);
@@ -936,7 +937,7 @@ function renderAll() {
   renderSide();
   renderAlerts();
   const page = document.querySelector(".page.active").id;
-  if (page === "page-home") renderHome();
+  if (page === "page-home" || page === "page-stats") renderHome();
   if (page === "page-servers") renderServers();
   if (page === "page-subs") renderSubs();
   if (page === "page-procs") renderProcsPage();
@@ -1008,7 +1009,7 @@ listen("tick", (e) => {
   }
   lastTickAt = performance.now();
   const page = document.querySelector(".page.active").id;
-  if (page === "page-home") renderHome();
+  if (page === "page-home" || page === "page-stats") renderHome();
   if (page === "page-servers") renderServers();
 });
 
@@ -1020,7 +1021,7 @@ let lastFrame = 0;
 function frame(now) {
   requestAnimationFrame(frame);
   // ~40 fps is plenty for a chart and keeps the CPU cool.
-  if (now - lastFrame < 24 || document.hidden || !$("page-home").classList.contains("active") || !chartSeries) return;
+  if (now - lastFrame < 24 || document.hidden || !$("page-stats").classList.contains("active") || !chartSeries) return;
   if (!widgetOn("chart-ping") && !widgetOn("chart-loss")) return;
   lastFrame = now;
   const phase = Math.min(1, (now - lastTickAt) / 1000);
@@ -1059,6 +1060,8 @@ refreshState().finally(async () => {
   // ...and OPENLAG_START_PAGE=settings:#rd-host scrolls to an element.
   if (shell?.startsWith("#")) document.querySelector(shell)?.scrollIntoView({ block: "center" });
   // ...and OPENLAG_START_PAGE=home:trace=1.1.1.1 runs a route check.
+  if (shell === "add") openAddPop();
+  if (shell === "ping") $("q-ping").click();
   if (shell?.startsWith("trace=")) { await runTrace(shell.slice(6)); $("trace-table").scrollIntoView({ block: "center" }); }
   invoke("ui_ready");
 });
@@ -1098,4 +1101,136 @@ $("trace-target").addEventListener("keydown", (e) => { if (e.key === "Enter") ru
 $("flows").addEventListener("click", (e) => {
   const b = e.target.closest("[data-trace]");
   if (b) runTrace(b.dataset.trace);
+});
+
+// ---------------------------------------------------------------- home: quick panel
+
+const realDelay = new Map(); // server key -> ms (null = no answer), from the "Ping" button
+
+function renderQuick() {
+  const s = state.settings;
+  document.querySelectorAll("#q-mode button").forEach((b) => b.classList.toggle("active", b.dataset.mode === s.mode));
+
+  // Server picker: auto + enabled servers, best ping first.
+  const ex = exits();
+  const servers = state.servers.filter((x) => !x.disabled)
+    .map((x) => ({ ...x, ping: ex.get(x.key)?.alive ? ex.get(x.key).srtt_ms : null }))
+    .sort((a, b) => (a.ping ?? 1e9) - (b.ping ?? 1e9));
+  const opts = [`<option value="">Авто — лучший пинг</option>`]
+    .concat(servers.map((x) => `<option value="${esc(x.key)}">${esc(x.country ? countryName(x.country) + " · " : "")}${esc(x.name)}${x.ping != null ? ` — ${Math.round(x.ping)} мс` : ""}</option>`))
+    .concat(state.relay_names.map((n) => `<option value="${esc(n)}">Свой relay · ${esc(n)}</option>`));
+  const sel = $("q-server");
+  // Rebuilding an open <select> closes it: only when the list itself changed.
+  const sig = servers.map((x) => x.key).join("|") + state.relay_names.join("|");
+  if (sel.dataset.sig !== sig || document.activeElement !== sel) {
+    sel.innerHTML = opts.join("");
+    sel.dataset.sig = sig;
+  }
+  sel.value = s.preferred_exit ?? "";
+
+  const gs = groups();
+  $("q-groups").innerHTML = gs.length
+    ? gs.map((g) => `<button class="qchip${g.enabled ? " on" : ""}" data-g="${esc(g.id)}">${esc(g.name)}<small>${g.processes.length}</small></button>`).join("")
+    : `<span class="hint">Групп нет — <button class="link" data-go="procs">создать</button></span>`;
+  $("q-auto").checked = !!s.auto_connect;
+  $("q-auto").disabled = s.mode !== "only";
+  $("q-kill").checked = !!s.kill_switch;
+  $("q-boost").checked = !!s.boost_priority;
+
+  // Top servers by ping, one click to pick.
+  const top = servers.filter((x) => x.ping != null).slice(0, 6);
+  $("q-top").innerHTML = top.length
+    ? top.map((x) => {
+        const real = realDelay.get(x.key);
+        const picked = s.preferred_exit === x.key;
+        return `<button class="top-row${picked ? " picked" : ""}" data-k="${esc(x.key)}">
+          ${flagHtml(x.country)}<span class="tn">${esc(x.name)}<small>${esc(x.country ? countryName(x.country) : x.subscription)}</small></span>
+          <span class="tr muted" title="Реальная задержка HTTPS через сервер">${real === undefined ? "" : real == null ? "нет ответа" : "HTTPS " + Math.round(real) + " мс"}</span>
+          <span class="tp ${pingClass(x.ping)}">${Math.round(x.ping)} мс</span>
+          <span class="tsel">${picked ? "выбран" : ""}</span>
+        </button>`;
+      }).join("")
+    : `<p class="hint">Пинг появится через несколько секунд после запуска серверов.</p>`;
+}
+
+document.querySelectorAll("#q-mode button").forEach((b) => b.addEventListener("click", () => {
+  if (b.dataset.mode !== state.settings.mode) saveSelection(groups(), b.dataset.mode);
+}));
+$("q-server").addEventListener("change", async (e) => {
+  const key = e.target.value || null;
+  await call("set_preferred", { key }, key ? `Новые соединения пойдут через ${displayName(key)}` : "Автовыбор сервера");
+  await refreshState();
+});
+$("q-groups").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-g]");
+  if (!b) return;
+  const gs = structuredClone(groups());
+  const g = gs.find((x) => x.id === b.dataset.g);
+  if (g) { g.enabled = !g.enabled; saveSelection(gs); }
+});
+$("q-auto").addEventListener("change", (e) => saveSelection(groups(), state.settings.mode, e.target.checked));
+$("q-kill").addEventListener("change", async (e) => {
+  await call("set_kill_switch", { on: e.target.checked }, e.target.checked ? "Kill switch включён: без сервера трафик выбранных программ блокируется" : "Kill switch выключен");
+  await refreshState();
+});
+$("q-boost").addEventListener("change", async (e) => {
+  try { await call("set_extras", { hotkey: state.settings.hotkey, boostPriority: e.target.checked }, "Сохранено"); } catch { /* toast */ }
+  await refreshState();
+});
+$("q-top").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-k]");
+  if (!b) return;
+  const key = state.settings.preferred_exit === b.dataset.k ? null : b.dataset.k;
+  await call("set_preferred", { key }, key ? `Новые соединения пойдут через ${displayName(key)}` : "Автовыбор сервера");
+  await refreshState();
+});
+$("q-ping").addEventListener("click", async () => {
+  const b = $("q-ping");
+  if (b.classList.contains("busy")) return;
+  b.classList.add("busy");
+  try {
+    const r = await invoke("test_delays");
+    for (const [k, ms] of r) realDelay.set(k, ms);
+    const best = r.filter(([, ms]) => ms != null).sort((a, b) => a[1] - b[1])[0];
+    toast(best ? `Лучшая задержка: ${displayName(best[0])} — ${Math.round(best[1])} мс` : "Ни один сервер не ответил", best ? "ok" : "error");
+  } catch (e) { toast(ru(e), "error"); }
+  b.classList.remove("busy");
+  renderQuick();
+});
+
+// "+" on Home: add a subscription without leaving the page.
+function openAddPop(text = "") {
+  $("pop-input").value = text;
+  $("add-pop").hidden = false;
+  setTimeout(() => $("pop-input").focus(), 30);
+}
+function closeAddPop() { $("add-pop").hidden = true; }
+$("quick-add").addEventListener("click", () => openAddPop());
+$("pop-cancel").addEventListener("click", closeAddPop);
+$("add-pop").addEventListener("mousedown", (e) => { if (e.target === $("add-pop")) closeAddPop(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("add-pop").hidden) closeAddPop(); });
+$("pop-clip").addEventListener("click", async () => {
+  try { $("pop-input").value = (await navigator.clipboard.readText()).trim(); } catch { /* denied */ }
+  if (!$("pop-input").value) toast("В буфере обмена нет ссылки или ключей", "error");
+});
+$("pop-file").addEventListener("click", async () => {
+  try { const t = await call("pick_config_file"); if (t != null) $("pop-input").value = t; } catch { /* toast */ }
+});
+$("pop-add").addEventListener("click", async () => {
+  const input = $("pop-input").value;
+  if (!input.trim()) return toast("Вставьте ссылку или ключи", "error");
+  const btn = $("pop-add");
+  btn.disabled = true;
+  try {
+    const r = await call("add_subscription", { input });
+    toast(`«${r.name}»: добавлено серверов ${r.added}${r.skipped.length ? `, пропущено ${r.skipped.length}` : ""}`, "ok");
+    closeAddPop();
+  } catch { /* toast */ }
+  btn.disabled = false;
+  await refreshState();
+});
+
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("button.link[data-go]");
+  if (b) document.querySelector(`.nav[data-page="${b.dataset.go}"]`)?.click();
 });

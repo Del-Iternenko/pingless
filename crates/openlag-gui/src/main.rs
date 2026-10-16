@@ -1100,6 +1100,7 @@ fn main() {
             set_extras,
             speed_test,
             trace_route,
+            test_delays,
             export_settings,
             import_settings,
             relay_deploy,
@@ -2005,4 +2006,32 @@ async fn trace_route(target: String) -> CmdResult<TraceView> {
         reached,
         hops,
     })
+}
+
+/// "Real delay" through every running server at once (an HTTPS request on an open
+/// connection), like v2rayN's test. None = the server did not answer.
+#[tauri::command]
+async fn test_delays(st: Shared<'_>) -> CmdResult<Vec<(String, Option<f64>)>> {
+    let socks: Vec<(String, std::net::SocketAddr)> = st
+        .net
+        .lock()
+        .await
+        .socks
+        .iter()
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
+    if socks.is_empty() {
+        return Err(tr!("серверы не запущены", "no servers are running"));
+    }
+    let mut out = Vec::with_capacity(socks.len());
+    for chunk in socks.chunks(8) {
+        let results = futures_util::future::join_all(
+            chunk
+                .iter()
+                .map(|(k, s)| async move { (k.clone(), speed::delay(*s).await.ok()) }),
+        )
+        .await;
+        out.extend(results);
+    }
+    Ok(out)
 }

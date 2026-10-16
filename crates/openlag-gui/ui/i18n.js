@@ -176,6 +176,15 @@ const I18N = (() => {
     "Большой пинг на главной": "Big ping on Home", "Плитки: джиттер, потери, сравнение, соединения": "Tiles: jitter, loss, comparison, connections",
     "График пинга": "Ping chart", "График потерь": "Loss chart", "Таблица соединений": "Connections table", "Проверка маршрута": "Route check",
     "Страны выхода на «Серверах»": "Exit countries on “Servers”", "Фильтры на «Серверах»": "Filters on “Servers”", "Мини-графики у серверов": "Server sparklines",
+    "Статистика": "Statistics", "Режим": "Mode", "Всё, кроме": "All except", "Пинг": "Ping", "Группы": "Groups", "изменить": "edit", "создать": "create",
+    "Реальная задержка через каждый сервер: HTTPS-запрос, как в v2rayN": "Real delay through every server: an HTTPS request, like v2rayN",
+    "Приоритет игр": "Game priority", "Лучшие серверы": "Best servers", "все серверы →": "all servers →",
+    "Авто — лучший пинг": "Auto — best ping", "выбран": "selected", "Реальная задержка HTTPS через сервер": "Real HTTPS delay through the server",
+    "Пинг появится через несколько секунд после запуска серверов.": "Ping shows up a few seconds after the servers start.",
+    "Ни один сервер не ответил": "No server answered", "Добавить подписку или ключи": "Add a subscription or keys",
+    "Ссылка на подписку, ключи vless:// vmess:// trojan:// ss:// hysteria2:// wireguard://, ключ Amnezia vpn:// или текст .conf":
+      "Subscription link, keys vless:// vmess:// trojan:// ss:// hysteria2:// wireguard://, an Amnezia vpn:// key or .conf text",
+    "Групп нет —": "No groups —",
     "Восстановить…": "Restore…", "Сохранить копию…": "Save backup…", "Резервная копия сохранена": "Backup saved", "Настройки восстановлены": "Settings restored",
   };
   const EN = new Map(Object.entries(EN_RAW).map(([k, v]) => [norm(k), v]));
@@ -184,6 +193,7 @@ const I18N = (() => {
   // phrases themselves (like "обновлено 5 мин назад").
   const PATTERNS = [
     [/^([\d.,]+) мс$/, "$1 ms"],
+    [/^HTTPS (\d+) мс$/, "HTTPS $1 ms"],
     [/^([\d.,]+) с назад$/, "$1 s ago"],
     [/^(\d+) мин назад$/, "$1 min ago"],
     [/^(\d+) ч назад$/, "$1 h ago"],
@@ -244,6 +254,8 @@ const I18N = (() => {
     [/^Не удалось включить: (.+)$/, "Could not turn on: $1"],
     [/^Сервер подписки ответил ошибкой HTTP (\d+)$/, "The subscription server answered HTTP $1"],
     [/^Тест скорости: (.+)…$/, "Speed test: $1…"],
+    [/^Лучшая задержка: (.+) — (\d+) мс$/, "Best delay: $1 — $2 ms"],
+    [/^(.+) — (\d+) мс$/, "$1 — $2 ms"],
     [/^(.+) · сервер ответил$/, "$1 · server answered"],
     [/^(.+) · сервер не отвечает на ICMP$/, "$1 · the server does not answer ICMP"],
     [/^(.+): ([\d.]+) Мбит\/с · отклик (\d+) мс$/, "$1: $2 Mbit/s · response $3 ms"],

@@ -22,6 +22,19 @@ const DOWN_URL: &str = "https://speed.cloudflare.com/__down?bytes=25000000";
 /// The download stops after this long; enough to get past TCP slow start.
 const DOWN_TIME: Duration = Duration::from_secs(7);
 
+/// Real delay only: the second of two HTTPS requests on one connection, ms.
+pub async fn delay(socks: SocketAddr) -> Result<f64> {
+    let client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all(format!("socks5h://{socks}"))?)
+        .connect_timeout(Duration::from_secs(6))
+        .timeout(Duration::from_secs(8))
+        .build()?;
+    client.get(DELAY_URL).send().await?;
+    let t = Instant::now();
+    client.get(DELAY_URL).send().await?;
+    Ok(t.elapsed().as_secs_f64() * 1000.0)
+}
+
 pub async fn run(socks: SocketAddr) -> Result<Speed> {
     let client = reqwest::Client::builder()
         .proxy(reqwest::Proxy::all(format!("socks5h://{socks}"))?)

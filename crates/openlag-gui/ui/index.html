@@ -27,6 +27,7 @@
       <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
       <symbol id="i-backspace" viewBox="0 0 24 24"><path d="M21 5H9l-6 7 6 7h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z"/><path d="m17 9-5 6M12 9l5 6"/></symbol>
       <symbol id="i-term" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></symbol>
+      <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V11M10 20V5M16 20v-6M21 20H3"/></symbol>
       <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></symbol>
     </defs>
   </svg>
@@ -46,6 +47,7 @@
     </div>
     <nav>
       <button class="nav active" data-page="home"><svg class="ic"><use href="#i-home"/></svg>Главная</button>
+      <button class="nav" data-page="stats"><svg class="ic"><use href="#i-chart"/></svg>Статистика</button>
       <button class="nav" data-page="servers"><svg class="ic"><use href="#i-server"/></svg>Серверы</button>
       <button class="nav" data-page="subs"><svg class="ic"><use href="#i-link"/></svg>Подписки</button>
       <button class="nav" data-page="procs"><svg class="ic"><use href="#i-cpu"/></svg>Процессы</button>
@@ -59,6 +61,10 @@
   <main>
     <!-- HOME -->
     <section class="page active" id="page-home">
+      <div class="page-head">
+        <h2>Главная</h2>
+        <button class="btn round" id="quick-add" title="Добавить подписку или ключи"><svg class="ic"><use href="#i-plus"/></svg></button>
+      </div>
       <div id="alerts"></div>
       <div class="hero card">
         <button class="power" id="power" aria-label="Включить оптимизацию">
@@ -78,6 +84,43 @@
         </div>
       </div>
 
+      <div class="card quick">
+        <div class="quick-grid">
+          <div class="q">
+            <span class="label">Режим</span>
+            <div class="seg small" id="q-mode">
+              <button data-mode="only">Только выбранные</button>
+              <button data-mode="all_except">Всё, кроме</button>
+            </div>
+          </div>
+          <div class="q">
+            <span class="label">Сервер</span>
+            <div class="row">
+              <select id="q-server"></select>
+              <button class="btn" id="q-ping" title="Реальная задержка через каждый сервер: HTTPS-запрос, как в v2rayN"><svg class="ic"><use href="#i-refresh"/></svg>Пинг</button>
+            </div>
+          </div>
+          <div class="q q-wide">
+            <span class="label">Группы <button class="link" data-go="procs">изменить</button></span>
+            <div class="qchips" id="q-groups"></div>
+          </div>
+          <div class="q q-wide q-toggles">
+            <label class="qt"><input type="checkbox" id="q-auto"><span>Автоподключение</span></label>
+            <label class="qt"><input type="checkbox" id="q-kill"><span>Kill switch</span></label>
+            <label class="qt"><input type="checkbox" id="q-boost"><span>Приоритет игр</span></label>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h3>Лучшие серверы</h3><button class="link" data-go="servers">все серверы →</button></div>
+        <div class="top-list" id="q-top"></div>
+      </div>
+    </section>
+
+    <!-- STATS -->
+    <section class="page" id="page-stats">
+      <div class="page-head"><h2>Статистика</h2></div>
       <div class="kpis" data-widget="kpis">
         <div class="card kpi"><div class="label">Джиттер</div><div class="kpi-val" id="kpi-jitter">—</div></div>
         <div class="card kpi"><div class="label">Потери</div><div class="kpi-val" id="kpi-loss">—</div></div>
@@ -421,6 +464,20 @@
       </div>
     </section>
   </main>
+
+  <div class="pop-backdrop" id="add-pop" hidden>
+    <div class="pop card">
+      <div class="card-head"><h3>Добавить подписку</h3></div>
+      <textarea id="pop-input" rows="4" spellcheck="false" placeholder="Ссылка на подписку, ключи vless:// vmess:// trojan:// ss:// hysteria2:// wireguard://, ключ Amnezia vpn:// или текст .conf"></textarea>
+      <div class="row end">
+        <button class="btn" id="pop-clip">Из буфера</button>
+        <button class="btn" id="pop-file">Из файла…</button>
+        <span style="flex:1"></span>
+        <button class="btn" id="pop-cancel">Отмена</button>
+        <button class="btn primary" id="pop-add"><svg class="ic"><use href="#i-plus"/></svg>Добавить</button>
+      </div>
+    </div>
+  </div>
 
   <div id="toasts" aria-live="polite"></div>
   <script src="i18n.js"></script>

@@ -360,11 +360,11 @@ body.no-spark .srv canvas { display: none; }
 body.no-hero-ping .hero-kpi { display: none; }
 /* Wide windows: the two charts side by side. */
 @container main (min-width: 1500px) {
-  #page-home { display: none; }
-  #page-home.active { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
-  #page-home > * { grid-column: 1 / -1; }
-  #page-home > [data-widget="chart-ping"], #page-home > [data-widget="chart-loss"] { grid-column: auto; }
-  #page-home > [data-widget="chart-loss"] canvas { height: 200px; }
+  #page-stats { display: none; }
+  #page-stats.active { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
+  #page-stats > * { grid-column: 1 / -1; }
+  #page-stats > [data-widget="chart-ping"], #page-stats > [data-widget="chart-loss"] { grid-column: auto; }
+  #page-stats > [data-widget="chart-loss"] canvas { height: 200px; }
 }
 /* Server rows lose the extras first, the name keeps its room. */
 @container main (max-width: 1080px) {
@@ -385,4 +385,44 @@ body.no-hero-ping .hero-kpi { display: none; }
 }
 @container main (min-width: 1081px) {
   body.no-spark .srv { grid-template-columns: 14px minmax(0, 1fr) 90px 70px 70px 212px; }
+}
+
+/* ---------- Home: compact quick panel ---------- */
+.btn.round { width: 40px; height: 40px; padding: 0; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: #06130e; border: 0; }
+.btn.round:hover { filter: brightness(1.1); }
+.btn.round .ic { width: 20px; height: 20px; stroke-width: 2.4; }
+.quick-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px 20px; }
+.q { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.q .label { display: flex; align-items: center; gap: 8px; }
+.q-wide { grid-column: 1 / -1; }
+.q .row select { flex: 1; min-width: 0; max-width: none; }
+.q .seg { align-self: flex-start; margin: 0; }
+.qchips { display: flex; flex-wrap: wrap; gap: 8px; }
+.qchip { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border-radius: 16px; border: 1px solid var(--border-strong); background: var(--bg); color: var(--muted); cursor: pointer; font-size: 13px; transition: background 150ms, color 150ms, border-color 150ms; }
+.qchip small { font-size: 11px; opacity: .7; }
+.qchip.on { background: var(--accent-soft); border-color: transparent; color: var(--accent); font-weight: 600; }
+.q-toggles { flex-direction: row; flex-wrap: wrap; gap: 8px 24px; }
+.qt { display: flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
+.qt input { accent-color: var(--accent); width: 16px; height: 16px; }
+button.link { border: 0; background: none; padding: 0; color: var(--accent); cursor: pointer; font: inherit; font-size: 12px; text-transform: none; letter-spacing: 0; }
+button.link:hover { text-decoration: underline; }
+.top-list { display: flex; flex-direction: column; gap: 6px; }
+.top-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto 70px 56px; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; text-align: left; transition: border-color 150ms, background 150ms; }
+.top-row:hover { border-color: var(--border-strong); }
+.top-row.picked { border-color: var(--accent); background: var(--accent-soft); }
+.top-row .tn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.top-row .tn small { margin-left: 8px; font-weight: 400; color: var(--muted); font-size: 12px; }
+.top-row .tp { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.top-row .tr { font-size: 12px; font-variant-numeric: tabular-nums; }
+.top-row .tsel { font-size: 12px; color: var(--accent); text-align: right; }
+#q-ping.busy { pointer-events: none; opacity: .6; }
+#q-ping.busy .ic { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.pop-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); display: grid; place-items: center; z-index: 20; padding: 20px; }
+.pop-backdrop[hidden] { display: none !important; }
+.pop { width: min(560px, 100%); display: flex; flex-direction: column; gap: 12px; animation: in 160ms ease-out; }
+.pop textarea { width: 100%; }
+@container main (max-width: 600px) {
+  .top-row { grid-template-columns: 22px minmax(0, 1fr) 64px; }
+  .top-row .tr, .top-row .tsel { display: none; }
 }
