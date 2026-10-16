@@ -100,6 +100,7 @@ async fn run(cfg: Config) -> Result<()> {
         mode,
         tunnel_existing: cfg.capture.tunnel_existing,
         exclude_pids: vec![],
+        ..Default::default()
     })?;
     let engine = Arc::new(Engine::start(cfg.engine, capture.downstream()).await?);
 

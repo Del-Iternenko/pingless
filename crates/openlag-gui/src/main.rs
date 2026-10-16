@@ -105,6 +105,7 @@ struct CaptureView {
     direct: u64,
     injected: u64,
     inject_errors: u64,
+    blocked: u64,
 }
 
 #[derive(Serialize, Clone)]
@@ -367,6 +368,18 @@ impl AppState {
                 .and_then(|x| x.pid())
                 .into_iter()
                 .collect(),
+            // In "only" mode each enabled group may pin its programs to a server.
+            exit_for: if s.all_except() {
+                HashMap::new()
+            } else {
+                s.groups
+                    .iter()
+                    .filter(|g| g.enabled)
+                    .filter_map(|g| g.exit.as_ref().map(|e| (g, e)))
+                    .flat_map(|(g, e)| g.processes.iter().map(move |p| (p.clone(), e.clone())))
+                    .collect()
+            },
+            kill_switch: s.kill_switch,
         })?;
         *self.sink.write() = Some(capture.downstream());
         capture.start(engine);
@@ -920,6 +933,7 @@ fn main() {
                                 direct: s.direct,
                                 injected: s.injected,
                                 inject_errors: s.inject_errors,
+                                blocked: s.blocked,
                             }
                         }),
                         capturing: net.capture.is_some(),
@@ -986,6 +1000,7 @@ fn main() {
             ssh_forget_key,
             pick_key_file,
             open_url,
+            set_kill_switch,
             start_page,
         ])
         .build(tauri::generate_context!())
@@ -1435,4 +1450,17 @@ fn open_url(url: String) {
     if url.starts_with("https://") {
         sys::open_url(&url);
     }
+}
+
+#[tauri::command]
+async fn set_kill_switch(st: Shared<'_>, on: bool) -> CmdResult<()> {
+    st.settings.lock().kill_switch = on;
+    st.save().map_err(err)?;
+    // Capture reads it at start.
+    let mut net = st.net.lock().await;
+    if net.capture.is_some() {
+        st.stop_capture(&mut net);
+        st.start_capture(&mut net).map_err(err)?;
+    }
+    Ok(())
 }

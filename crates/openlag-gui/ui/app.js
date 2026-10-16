@@ -619,6 +619,7 @@ function renderProcsPage() {
         <div class="chips">${g.processes.length
           ? g.processes.map((p) => `<span class="chip">${esc(p)}<button data-act="remove" data-p="${esc(p)}" aria-label="Убрать">${icon("x")}</button></span>`).join("")
           : `<span class="hint">Пусто. Добавьте программы справа, через «Обзор» или вручную.</span>`}</div>
+        ${state.settings.mode === "only" ? `<label class="group-exit"><span>Сервер группы</span><select data-act="exit">${groupExitOptions(g.exit)}</select></label>` : ""}
         <div class="row">
           <input data-act="manual" placeholder="program.exe">
           <button class="btn" data-act="add">${icon("plus")}Добавить</button>
@@ -642,6 +643,7 @@ function renderProcsPage() {
       return c;
     };
     el.querySelector('[data-act="toggle"]').addEventListener("change", (e) => saveSelection(edit((g) => { g.enabled = e.target.checked; })));
+    el.querySelector('[data-act="exit"]')?.addEventListener("change", (e) => saveSelection(edit((g) => { g.exit = e.target.value || null; })));
     el.querySelector('[data-act="rename"]').addEventListener("change", (e) => saveSelection(edit((g) => { g.name = e.target.value.trim() || "Группа"; })));
     el.querySelector('[data-act="delete"]').addEventListener("click", () => saveSelection(groups().filter((x) => x.id !== id)));
     el.querySelectorAll('[data-act="remove"]').forEach((b) => b.addEventListener("click", () => saveSelection(edit((g) => { g.processes = g.processes.filter((p) => p !== b.dataset.p); }))));
@@ -656,6 +658,21 @@ function renderProcsPage() {
     });
   });
   renderProcs();
+}
+
+// Servers a group can be pinned to: enabled ones, grouped by measured country.
+function groupExitOptions(current) {
+  const opts = [`<option value="">Как выбрано в «Серверах» (${state.settings.preferred_exit ? esc(displayName(state.settings.preferred_exit)) : "авто"})</option>`];
+  const servers = state.servers.filter((s) => !s.disabled).sort((a, b) => (a.country ? countryName(a.country) : "яя").localeCompare(b.country ? countryName(b.country) : "яя", "ru") || a.name.localeCompare(b.name));
+  for (const s of servers) {
+    const where = s.country ? `${countryName(s.country)} · ` : "";
+    opts.push(`<option value="${esc(s.key)}" ${s.key === current ? "selected" : ""}>${esc(where + s.name)}</option>`);
+  }
+  for (const r of state.relay_names) opts.push(`<option value="${esc(r)}" ${r === current ? "selected" : ""}>Свой relay · ${esc(r)}</option>`);
+  if (current && !servers.some((s) => s.key === current) && !state.relay_names.includes(current)) {
+    opts.push(`<option value="${esc(current)}" selected>Недоступен: ${esc(displayName(current))}</option>`);
+  }
+  return opts.join("");
 }
 
 function renderProcs() {
@@ -701,6 +718,7 @@ function renderSettings() {
     $("opt-autostart").checked = s.autostart;
     $("opt-minimized").checked = s.start_minimized;
     $("opt-tray").checked = s.close_to_tray;
+    $("opt-kill").checked = s.kill_switch;
     $("opt-update").checked = s.auto_update;
     $("opt-probe").value = String(s.probe_interval_ms);
     $("ui-chart").value = String(s.ui.chart_seconds);
@@ -744,6 +762,12 @@ $("startup-save").addEventListener("click", async () => {
   try {
     await call("set_startup", { autostart: $("opt-autostart").checked, startMinimized: $("opt-minimized").checked, probeMs: Number($("opt-probe").value), closeToTray: $("opt-tray").checked, autoUpdate: $("opt-update").checked }, "Сохранено");
   } catch { /* toast */ }
+  await refreshState();
+});
+$("opt-kill").addEventListener("change", async (e) => {
+  try {
+    await call("set_kill_switch", { on: e.target.checked }, e.target.checked ? "Kill switch включён: без сервера трафик выбранных программ блокируется" : "Kill switch выключен");
+  } catch { e.target.checked = !e.target.checked; }
   await refreshState();
 });
 $("relays-save").addEventListener("click", async () => {

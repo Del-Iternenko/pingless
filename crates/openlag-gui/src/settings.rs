@@ -39,6 +39,9 @@ pub struct Settings {
     pub start_minimized: bool,
     /// The window's close button hides OpenLag to the tray instead of quitting.
     pub close_to_tray: bool,
+    /// Block the selected programs' traffic when no server is reachable instead of
+    /// letting it go direct.
+    pub kill_switch: bool,
     /// Look for new releases on GitHub.
     pub auto_update: bool,
     pub ui: UiPrefs,
@@ -75,6 +78,7 @@ impl Default for Settings {
             autostart: false,
             start_minimized: false,
             close_to_tray: true,
+            kill_switch: false,
             auto_update: true,
             ui: UiPrefs::default(),
             ssh_hosts: Vec::new(),
@@ -127,6 +131,9 @@ pub struct ProcessGroup {
     pub enabled: bool,
     /// Lower-case executable names.
     pub processes: Vec<String>,
+    /// Server for this group's programs ("only" mode); None follows the global choice.
+    #[serde(default)]
+    pub exit: Option<String>,
 }
 
 impl Settings {
@@ -255,6 +262,7 @@ pub fn load(path: &Path) -> Settings {
             name: "Игры".into(),
             enabled: true,
             processes: std::mem::take(&mut s.games),
+            exit: None,
         });
     }
     if s.mode != "all_except" {

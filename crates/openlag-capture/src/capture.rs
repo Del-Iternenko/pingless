@@ -33,6 +33,11 @@ pub struct CaptureConfig {
     pub tunnel_existing: bool,
     /// Never tunnel these processes (our own xray, which carries the tunnel itself).
     pub exclude_pids: Vec<u32>,
+    /// Preferred exit per executable name (the server of the program's group).
+    pub exit_for: HashMap<String, String>,
+    /// When no exit is reachable, drop the selected programs' traffic instead of
+    /// letting it go direct.
+    pub kill_switch: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -42,12 +47,16 @@ pub struct CaptureStats {
     pub injected: u64,
     pub inject_errors: u64,
     pub tcp_redirected: u64,
+    /// Packets dropped by the kill switch.
+    pub blocked: u64,
 }
 
 struct Shared {
     names: HashSet<String>,
     mode: Selection,
     exclude_pids: HashSet<u32>,
+    exit_for: HashMap<String, String>,
+    kill_switch: bool,
     procs: ProcessMap,
     /// Interface a UDP flow was seen on, needed to inject answers.
     flow_if: Mutex<HashMap<FlowKey, (u32, u32)>>,
@@ -60,6 +69,7 @@ struct Shared {
     injected: AtomicU64,
     inject_errors: AtomicU64,
     tcp_redirected: AtomicU64,
+    blocked: AtomicU64,
 }
 
 /// Captures outbound traffic of the selected processes and injects answers back.
@@ -95,6 +105,12 @@ impl Capture {
                 .collect(),
             mode: cfg.mode,
             exclude_pids,
+            exit_for: cfg
+                .exit_for
+                .iter()
+                .map(|(k, v)| (k.to_lowercase(), v.clone()))
+                .collect(),
+            kill_switch: cfg.kill_switch,
             procs: ProcessMap::default(),
             flow_if: Mutex::default(),
             preexisting: Mutex::default(),
@@ -105,6 +121,7 @@ impl Capture {
             injected: AtomicU64::new(0),
             inject_errors: AtomicU64::new(0),
             tcp_redirected: AtomicU64::new(0),
+            blocked: AtomicU64::new(0),
         });
 
         for (port, pid) in port_table(TCP) {
@@ -169,6 +186,7 @@ impl Capture {
             injected: s.injected.load(Ordering::Relaxed),
             inject_errors: s.inject_errors.load(Ordering::Relaxed),
             tcp_redirected: s.tcp_redirected.load(Ordering::Relaxed),
+            blocked: s.blocked.load(Ordering::Relaxed),
         }
     }
 
@@ -273,9 +291,15 @@ impl Shared {
                 info!("{name} (pid {pid}) udp {} -> {}", udp.src, udp.dst);
             }
         }
-        match engine.send_upstream(key, udp.payload) {
+        let prefer = self.exit_for.get(&name).map(String::as_str);
+        match engine.send_upstream_via(key, udp.payload, prefer) {
             Upstream::Tunneled => {
                 self.tunneled.fetch_add(1, Ordering::Relaxed);
+                true
+            }
+            // Kill switch: swallow the packet rather than leak it outside the tunnel.
+            Upstream::Direct if self.kill_switch => {
+                self.blocked.fetch_add(1, Ordering::Relaxed);
                 true
             }
             Upstream::Direct => {
@@ -313,16 +337,23 @@ impl Shared {
         // App -> server: (client_ip:client_port) -> (server_ip:orig_port) becomes
         // (server_ip:client_port) -> (client_ip:listen).
         let known = engine.tcp_original(t.src.port()) == Some(SocketAddr::V4(t.dst));
-        let redirect = known
-            || (t.syn
-                && !t.ack
-                && !is_local_scope((*t.dst.ip()).into())
-                && self
-                    .procs
-                    .pid_for_port(TCP, t.src.port())
-                    .and_then(|pid| self.selected(pid))
-                    .is_some()
-                && engine.tcp_open(SocketAddr::V4(t.src), SocketAddr::V4(t.dst)));
+        let mut redirect = known;
+        if !known && t.syn && !t.ack && !is_local_scope((*t.dst.ip()).into()) {
+            let name = self
+                .procs
+                .pid_for_port(TCP, t.src.port())
+                .and_then(|pid| self.selected(pid));
+            if let Some(name) = name {
+                let prefer = self.exit_for.get(&name).map(String::as_str);
+                redirect =
+                    engine.tcp_open_via(SocketAddr::V4(t.src), SocketAddr::V4(t.dst), prefer);
+                if !redirect && self.kill_switch && engine.tcp_listen_port().is_some() {
+                    // Kill switch: drop the SYN; the program sees no connectivity.
+                    self.blocked.fetch_add(1, Ordering::Relaxed);
+                    return true;
+                }
+            }
+        }
         if !redirect {
             return false;
         }

@@ -245,7 +245,18 @@ impl Engine {
     /// Hands one UDP payload of a game flow to the engine. Never blocks: when a socket
     /// buffer is full the copy is dropped, as the network would do.
     pub fn send_upstream(&self, key: FlowKey, payload: &[u8]) -> Upstream {
-        self.inner.send_upstream(key, payload)
+        self.inner.send_upstream(key, payload, None)
+    }
+
+    /// Like [`Engine::send_upstream`], but a new flow prefers the exit `prefer` (for
+    /// example the server chosen for the program's group) while it is alive.
+    pub fn send_upstream_via(
+        &self,
+        key: FlowKey,
+        payload: &[u8],
+        prefer: Option<&str>,
+    ) -> Upstream {
+        self.inner.send_upstream(key, payload, prefer)
     }
 
     /// Returns true once at least one route has answered a probe.
@@ -273,11 +284,16 @@ impl Engine {
     /// Registers a new TCP connection from `client` to `orig` for redirection and
     /// returns true, or false if it should go direct (no reachable proxy exit).
     pub fn tcp_open(&self, client: SocketAddr, orig: SocketAddr) -> bool {
+        self.tcp_open_via(client, orig, None)
+    }
+
+    /// Like [`Engine::tcp_open`] with a preferred exit for this connection.
+    pub fn tcp_open_via(&self, client: SocketAddr, orig: SocketAddr, prefer: Option<&str>) -> bool {
         let inner = &self.inner;
         if inner.tcp_port.is_none() || !orig.is_ipv4() {
             return false;
         }
-        let Some(idx) = inner.best_proxy() else {
+        let Some(idx) = inner.best_proxy(prefer) else {
             return false;
         };
         let p = &inner.proxies[idx];
@@ -327,12 +343,17 @@ impl Inner {
         }
     }
 
-    fn send_upstream(self: &Arc<Self>, key: FlowKey, payload: &[u8]) -> Upstream {
+    fn send_upstream(
+        self: &Arc<Self>,
+        key: FlowKey,
+        payload: &[u8],
+        prefer: Option<&str>,
+    ) -> Upstream {
         let mut flows = self.flows.lock();
         let id = match flows.by_key.get(&key) {
             Some(id) => *id,
             None => {
-                let exit = self.best_exit();
+                let exit = self.best_exit(prefer);
                 let id = flows.next_id;
                 flows.next_id = flows.next_id.wrapping_add(1);
                 match exit {
@@ -433,7 +454,9 @@ impl Inner {
         Upstream::Tunneled
     }
 
-    fn best_exit(&self) -> Option<ExitRef> {
+    /// `prefer` (a group's server) wins over the global preferred exit; both only
+    /// while alive.
+    fn best_exit(&self, prefer: Option<&str>) -> Option<ExitRef> {
         let now = Instant::now();
         let mut candidates: Vec<(ExitRef, f64)> = Vec::new();
         for (i, e) in self.exits.iter().enumerate() {
@@ -451,11 +474,12 @@ impl Inner {
                 candidates.push((ExitRef::Proxy(i), score));
             }
         }
-        if let Some(name) = self.preferred.lock().as_deref() {
+        let global = self.preferred.lock().clone();
+        for name in [prefer, global.as_deref()].into_iter().flatten() {
             if let Some((e, _)) = candidates.iter().find(|(e, _)| self.exit_name(*e) == name) {
                 return Some(*e);
             }
-            warn!("preferred exit {name} is not reachable, using the best available one");
+            warn!("preferred exit {name} is not reachable");
         }
         candidates
             .into_iter()
@@ -464,13 +488,15 @@ impl Inner {
     }
 
     /// Best alive proxy exit, honouring the preferred exit when it is a proxy.
-    fn best_proxy(&self) -> Option<usize> {
+    fn best_proxy(&self, prefer: Option<&str>) -> Option<usize> {
         let now = Instant::now();
-        if let Some(name) = self.preferred.lock().as_deref()
-            && let Some(i) = self.proxies.iter().position(|p| p.spec.name == name)
-            && self.proxies[i].stats.lock().alive(now)
-        {
-            return Some(i);
+        let global = self.preferred.lock().clone();
+        for name in [prefer, global.as_deref()].into_iter().flatten() {
+            if let Some(i) = self.proxies.iter().position(|p| p.spec.name == name)
+                && self.proxies[i].stats.lock().alive(now)
+            {
+                return Some(i);
+            }
         }
         self.proxies
             .iter()

@@ -328,3 +328,6 @@ main:has(#page-term.active) { padding: 0; overflow: hidden; }
 .term-empty .ic { width: 42px; height: 42px; stroke-width: 1.5; }
 .term-credit { padding: 4px 14px 6px; font-size: 10.5px; color: var(--muted); border-top: 1px solid var(--border); }
 .term-credit a { color: var(--muted); text-decoration: underline; }
+
+.group-exit { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; font-size: 13px; color: var(--muted); }
+.group-exit select { flex: 1; min-width: 0; }

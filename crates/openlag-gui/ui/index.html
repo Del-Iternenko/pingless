@@ -236,6 +236,10 @@
           <span>Переводить в туннель уже открытые соединения<small>Обычно выкидывает из идущего матча. Лучше включать OpenLag до запуска игры.</small></span>
         </label>
         <label class="field check">
+          <input type="checkbox" id="opt-kill">
+          <span>Kill switch<small>Если ни один сервер не отвечает, трафик выбранных программ блокируется, а не уходит напрямую в обход VPN. Без сервера программы просто не будут работать.</small></span>
+        </label>
+        <label class="field check">
           <input type="checkbox" id="opt-bypass">
           <span>Обходить TUN других VPN<small>Если включён Happ, v2rayN и т.п. в режиме TUN, без этого трафик идёт через два VPN подряд: пинг и джиттер растут в разы.</small></span>
         </label>
