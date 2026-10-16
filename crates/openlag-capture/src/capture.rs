@@ -38,6 +38,9 @@ pub struct CaptureConfig {
     /// When no exit is reachable, drop the selected programs' traffic instead of
     /// letting it go direct.
     pub kill_switch: bool,
+    /// Programs whose TCP stays direct: only their UDP (the game itself) is tunnelled,
+    /// while launchers, downloads and chat over TCP keep the full home bandwidth.
+    pub udp_only: Vec<String>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -57,6 +60,7 @@ struct Shared {
     exclude_pids: HashSet<u32>,
     exit_for: HashMap<String, String>,
     kill_switch: bool,
+    udp_only: HashSet<String>,
     procs: ProcessMap,
     /// Interface a UDP flow was seen on, needed to inject answers.
     flow_if: Mutex<HashMap<FlowKey, (u32, u32)>>,
@@ -111,6 +115,7 @@ impl Capture {
                 .map(|(k, v)| (k.to_lowercase(), v.clone()))
                 .collect(),
             kill_switch: cfg.kill_switch,
+            udp_only: cfg.udp_only.iter().map(|p| p.to_lowercase()).collect(),
             procs: ProcessMap::default(),
             flow_if: Mutex::default(),
             preexisting: Mutex::default(),
@@ -342,7 +347,8 @@ impl Shared {
             let name = self
                 .procs
                 .pid_for_port(TCP, t.src.port())
-                .and_then(|pid| self.selected(pid));
+                .and_then(|pid| self.selected(pid))
+                .filter(|name| !self.udp_only.contains(name));
             if let Some(name) = name {
                 let prefer = self.exit_for.get(&name).map(String::as_str);
                 redirect =

@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   --bg: #0b0f17;
   --surface: #111827;
   --surface-2: #172033;
@@ -336,3 +336,53 @@ main:has(#page-term.active) { padding: 0; overflow: hidden; }
 .btn.icon.busy { pointer-events: none; color: var(--accent); }
 .btn.icon.busy svg { animation: blink 0.7s ease-in-out infinite alternate; }
 @keyframes blink { to { opacity: 0.25; } }
+
+.group-udp { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); cursor: pointer; margin: 2px 0 10px; }
+.group-udp input { accent-color: var(--accent); }
+
+.trace-btn { border: 0; background: transparent; color: var(--accent); cursor: pointer; padding: 0 4px; font-size: 13px; opacity: .7; }
+.trace-btn:hover { opacity: 1; }
+#trace-table { margin-top: 12px; }
+
+/* ---------- layout that follows the window size ---------- */
+main { container-type: inline-size; container-name: main; }
+.page { max-width: 1480px; }
+.page-head { flex-wrap: wrap; }
+.row.space, .row.end { flex-wrap: wrap; }
+.group .row { flex-wrap: wrap; }
+.group .row input { flex: 1 1 160px; min-width: 0; }
+.hero { flex-wrap: wrap; }
+.kpis { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.widget-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px 16px; }
+.wchk { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.wchk input { accent-color: var(--accent); }
+body.no-spark .srv canvas { display: none; }
+body.no-hero-ping .hero-kpi { display: none; }
+/* Wide windows: the two charts side by side. */
+@container main (min-width: 1500px) {
+  #page-home { display: none; }
+  #page-home.active { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
+  #page-home > * { grid-column: 1 / -1; }
+  #page-home > [data-widget="chart-ping"], #page-home > [data-widget="chart-loss"] { grid-column: auto; }
+  #page-home > [data-widget="chart-loss"] canvas { height: 200px; }
+}
+/* Server rows lose the extras first, the name keeps its room. */
+@container main (max-width: 1080px) {
+  .srv { grid-template-columns: 14px minmax(0, 1fr) 80px 60px 60px 212px; }
+  .srv canvas { display: none; }
+}
+@container main (max-width: 900px) {
+  .srv { grid-template-columns: 14px minmax(0, 1fr) 76px 168px; }
+  .srv .m-jit, .srv .m-loss { display: none; }
+  .srv .srv-actions { gap: 6px; }
+  .procs-grid { grid-template-columns: minmax(0, 1fr); }
+  .fun-grid { grid-template-columns: minmax(0, 1fr); }
+  .sys-info { grid-template-columns: 150px 1fr; }
+}
+@container main (max-width: 600px) {
+  .srv { grid-template-columns: 14px minmax(0, 1fr) 70px; }
+  .srv .srv-actions { grid-column: 2 / -1; justify-content: flex-start; }
+}
+@container main (min-width: 1081px) {
+  body.no-spark .srv { grid-template-columns: 14px minmax(0, 1fr) 90px 70px 70px 212px; }
+}

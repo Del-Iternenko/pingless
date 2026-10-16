@@ -78,30 +78,43 @@
         </div>
       </div>
 
-      <div class="kpis">
+      <div class="kpis" data-widget="kpis">
         <div class="card kpi"><div class="label">Джиттер</div><div class="kpi-val" id="kpi-jitter">—</div></div>
         <div class="card kpi"><div class="label">Потери</div><div class="kpi-val" id="kpi-loss">—</div></div>
         <div class="card kpi" title="Пинг до тех же серверов игры: напрямую с вашей сетевой карты и через OpenLag (по ответам самой игры)"><div class="label">Без OpenLag → с OpenLag</div><div class="kpi-val" id="kpi-compare">—</div><div class="kpi-sub" id="kpi-compare-sub">появится, когда игра начнёт пинговать свои серверы</div></div>
         <div class="card kpi"><div class="label">Соединений</div><div class="kpi-val" id="kpi-flows">0</div></div>
       </div>
 
-      <div class="card chart-card">
+      <div class="card chart-card" data-widget="chart-ping">
         <div class="card-head">
           <h3>Пинг, мс <span class="muted" id="chart-title"></span></h3>
           <div class="legend" id="legend"></div>
         </div>
         <canvas id="chart-ping" height="200"></canvas>
       </div>
-      <div class="card chart-card">
+      <div class="card chart-card" data-widget="chart-loss">
         <div class="card-head"><h3>Потери пакетов, %</h3></div>
         <canvas id="chart-loss" height="110"></canvas>
       </div>
 
-      <div class="card">
+      <div class="card" data-widget="flows">
         <div class="card-head"><h3>Соединения</h3><span class="muted" id="flows-count"></span></div>
         <table class="table">
           <thead><tr><th>Тип</th><th>Куда</th><th>Через</th><th class="num" title="ICMP напрямую с сетевой карты, в обход любых туннелей">Без OpenLag</th><th class="num" title="Время ответа сервера на пакеты самой игры через туннель">С OpenLag</th><th class="num">Трафик</th></tr></thead>
           <tbody id="flows"><tr><td colspan="6" class="empty">Пока нет. Включите оптимизацию и запустите программу.</td></tr></tbody>
+        </table>
+      </div>
+
+      <div class="card" data-widget="trace">
+        <div class="card-head"><h3>Маршрут до сервера</h3><span class="muted" id="trace-note"></span></div>
+        <p class="hint">Как WinMTR: показывает каждый узел по пути от вашей сетевой карты до сервера игры напрямую, без VPN, с потерями и пингом. Видно, где растёт задержка: дома, у провайдера или дальше. Нажмите ↯ у соединения или введите адрес.</p>
+        <div class="row">
+          <input id="trace-target" placeholder="IP или адрес сервера, например 155.133.248.34" style="flex:1">
+          <button class="btn" id="trace-run">Проверить маршрут</button>
+        </div>
+        <table class="table" id="trace-table" hidden>
+          <thead><tr><th class="num">#</th><th>Узел</th><th class="num">Потери</th><th class="num">Лучший</th><th class="num">Средний</th><th class="num">Худший</th></tr></thead>
+          <tbody id="trace-body"></tbody>
         </table>
       </div>
     </section>
@@ -116,7 +129,7 @@
         </div>
       </div>
       <p class="hint">Пинг меряется по UDP через сам сервер, так же как пойдут пакеты игры. Новые соединения идут через выбранный сервер, а в режиме «Авто» через сервер с лучшим пингом. Отключённые переключателем серверы не запускаются и никогда не выбираются.</p>
-      <div class="card">
+      <div class="card" data-widget="countries">
         <div class="card-head">
           <h3>Страны выхода <span class="muted" id="geo-note"></span></h3>
           <div class="row">
@@ -127,7 +140,7 @@
         <p class="hint" style="margin-bottom:10px">Страна определяется не по названию, а по факту: через каждый сервер запрашивается Cloudflare, и он сообщает, с какого IP и из какой страны реально выходит трафик. Щелчок по стране отключает или включает все её серверы.</p>
         <div class="countries" id="countries"></div>
       </div>
-      <div class="card">
+      <div class="card" data-widget="filters">
         <div class="card-head"><h3>Фильтры: отключить серверы по слову</h3><span class="muted" id="filter-count"></span></div>
         <div class="chips" id="filter-chips"></div>
         <div class="row">
@@ -145,7 +158,7 @@
       <div class="page-head"><h2>Подписки</h2></div>
       <div class="card">
         <label class="label" for="sub-input">Ссылка на подписку или ключи</label>
-        <textarea id="sub-input" rows="3" placeholder="https://… (Happ, Incy, Marzban, Remnawave)&#10;vless://…  vmess://…  trojan://…  ss://…&#10;vpn://… (Amnezia: Xray или WireGuard)&#10;wireguard://…  или текст .conf WireGuard"></textarea>
+        <textarea id="sub-input" rows="4" placeholder="https://… (Happ, Incy, Marzban, Remnawave)&#10;vless://…  vmess://…  trojan://…  ss://…&#10;vpn://… (Amnezia: Xray или WireGuard)&#10;wireguard://…  или текст .conf WireGuard"></textarea>
         <div class="row space">
           <span class="hint">Ссылку на подписку даёт VPN-сервис: в личном кабинете или в Telegram-боте, обычно кнопка «Подключить» или «Скопировать ссылку».</span>
           <button class="btn" id="sub-clip">Из буфера</button>
@@ -312,6 +325,11 @@
         <div class="field">
           <span>Цвет пинга: зелёный до, жёлтый до (мс), дальше красный</span>
           <div class="row"><input id="ui-good" type="number" min="1" style="width:110px"><input id="ui-mid" type="number" min="2" style="width:110px"></div>
+        </div>
+        <div class="field">
+          <span>Что показывать</span>
+          <div class="widget-list" id="widget-list"></div>
+          <small>Выключенные блоки не рисуются и не тратят процессор.</small>
         </div>
         <label class="field check">
           <input type="checkbox" id="ui-compact">

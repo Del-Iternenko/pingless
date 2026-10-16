@@ -101,7 +101,39 @@ function applyUi() {
   root.setProperty("--accent-soft", `rgba(${r}, ${g}, ${b}, 0.14)`);
   document.body.classList.toggle("compact", !!ui.compact);
   HISTORY = Math.min(HISTORY_MAX, ui.chart_seconds || 120);
+  const hidden = new Set(ui.hidden ?? []);
+  document.querySelectorAll("[data-widget]").forEach((el) => { el.hidden = hidden.has(el.dataset.widget); });
+  document.body.classList.toggle("no-spark", hidden.has("spark"));
+  document.body.classList.toggle("no-hero-ping", hidden.has("hero-ping"));
 }
+
+// Blocks the user can switch off in Settings → Appearance.
+const WIDGETS = [
+  ["hero-ping", "Большой пинг на главной"],
+  ["kpis", "Плитки: джиттер, потери, сравнение, соединения"],
+  ["chart-ping", "График пинга"],
+  ["chart-loss", "График потерь"],
+  ["flows", "Таблица соединений"],
+  ["trace", "Проверка маршрута"],
+  ["countries", "Страны выхода на «Серверах»"],
+  ["filters", "Фильтры на «Серверах»"],
+  ["spark", "Мини-графики у серверов"],
+];
+function widgetOn(name) {
+  return !(state?.settings.ui.hidden ?? []).includes(name);
+}
+function renderWidgetList() {
+  const hidden = new Set(state.settings.ui.hidden ?? []);
+  const html = WIDGETS.map(([id, label]) => `<label class="wchk"><input type="checkbox" data-w="${id}" ${hidden.has(id) ? "" : "checked"}><span>${label}</span></label>`).join("");
+  if ($("widget-list").dataset.sig !== html) {
+    $("widget-list").innerHTML = html;
+    $("widget-list").dataset.sig = html;
+  }
+}
+$("widget-list").addEventListener("change", async () => {
+  const hidden = [...$("widget-list").querySelectorAll("input")].filter((i) => !i.checked).map((i) => i.dataset.w);
+  await saveUi({ hidden });
+});
 
 // ---------------------------------------------------------------- helpers
 
@@ -234,7 +266,7 @@ function renderHome() {
       const d = (tick?.direct ?? {})[f.remote.split(":")[0]];
       const dTxt = d?.ms != null ? `${fmtMs(d.ms)} мс <span class="muted">±${d.jitter_ms.toFixed(0)}</span>` : d ? `<span class="muted">нет ответа</span>` : "—";
       const tTxt = f.rtt_ms != null ? `<span class="${f.rtt_ms <= (d?.ms ?? Infinity) ? "good" : ""}">${fmtMs(f.rtt_ms)} мс</span> <span class="muted">±${(f.rtt_jitter_ms ?? 0).toFixed(0)}</span>` : `<span class="muted" title="Поток матча: игра шлёт пакеты потоком, пинг видно в самой игре">поток</span>`;
-      return `<tr><td><span class="proto udp">UDP</span></td><td class="mono">${esc(f.remote)}</td><td>${esc(f.exit ? displayName(f.exit) : "напрямую")}</td><td class="num">${dTxt}</td><td class="num">${tTxt}</td><td class="num">${f.packets_up}↑ ${f.packets_down}↓${f.duplicates ? ` <span class="muted">(+${f.duplicates})</span>` : ""}</td></tr>`;
+      return `<tr><td><span class="proto udp">UDP</span></td><td class="mono">${esc(f.remote)} <button class="trace-btn" data-trace="${esc(f.remote.split(":")[0])}" title="Проверить маршрут">↯</button></td><td>${esc(f.exit ? displayName(f.exit) : "напрямую")}</td><td class="num">${dTxt}</td><td class="num">${tTxt}</td><td class="num">${f.packets_up}↑ ${f.packets_down}↓${f.duplicates ? ` <span class="muted">(+${f.duplicates})</span>` : ""}</td></tr>`;
     }),
     ...tcp.slice(0, 30).map((t) => `<tr><td><span class="proto tcp">TCP</span></td><td class="mono">${esc(t.remote)}</td><td>${esc(displayName(t.exit))}</td><td class="num">—</td><td class="num">—</td><td class="num">${fmtBytes(t.bytes_up)}↑ ${fmtBytes(t.bytes_down)}↓</td></tr>`),
   ];
@@ -365,7 +397,7 @@ function updateRow(el, r, p, pref) {
     btn.innerHTML = label;
     btn.dataset.label = label;
   }
-  Chart.spark(el.querySelector("canvas"), (history.get(r.key) ?? []).slice(-40).map((h) => h.rtt), accentColor());
+  if (widgetOn("spark")) Chart.spark(el.querySelector("canvas"), (history.get(r.key) ?? []).slice(-40).map((h) => h.rtt), accentColor());
 }
 
 function renderServers() {
@@ -659,7 +691,8 @@ function renderProcsPage() {
         <div class="chips">${g.processes.length
           ? g.processes.map((p) => `<span class="chip">${esc(p)}<button data-act="remove" data-p="${esc(p)}" aria-label="Убрать">${icon("x")}</button></span>`).join("")
           : `<span class="hint">Пусто. Добавьте программы справа, через «Обзор» или вручную.</span>`}</div>
-        ${state.settings.mode === "only" ? `<label class="group-exit"><span>Сервер группы</span><select data-act="exit">${groupExitOptions(g.exit)}</select></label>` : ""}
+        ${state.settings.mode === "only" ? `<label class="group-exit"><span>Сервер группы</span><select data-act="exit">${groupExitOptions(g.exit)}</select></label>
+        <label class="group-udp" title="Через VPN идёт только UDP, то есть сама игра. Лаунчер, загрузки и чат по TCP остаются напрямую на полной скорости"><input type="checkbox" data-act="udp" ${g.udp_only ? "checked" : ""}><span>Только UDP (игра), TCP напрямую</span></label>` : ""}
         <div class="row">
           <input data-act="manual" placeholder="program.exe">
           <button class="btn" data-act="add">${icon("plus")}Добавить</button>
@@ -684,6 +717,7 @@ function renderProcsPage() {
     };
     el.querySelector('[data-act="toggle"]').addEventListener("change", (e) => saveSelection(edit((g) => { g.enabled = e.target.checked; })));
     el.querySelector('[data-act="exit"]')?.addEventListener("change", (e) => saveSelection(edit((g) => { g.exit = e.target.value || null; })));
+    el.querySelector('[data-act="udp"]')?.addEventListener("change", (e) => saveSelection(edit((g) => { g.udp_only = e.target.checked; })));
     el.querySelector('[data-act="rename"]').addEventListener("change", (e) => saveSelection(edit((g) => { g.name = e.target.value.trim() || "Группа"; })));
     el.querySelector('[data-act="delete"]').addEventListener("click", () => saveSelection(groups().filter((x) => x.id !== id)));
     el.querySelectorAll('[data-act="remove"]').forEach((b) => b.addEventListener("click", () => saveSelection(edit((g) => { g.processes = g.processes.filter((p) => p !== b.dataset.p); }))));
@@ -787,6 +821,7 @@ function renderSettings() {
     settingsFilled = true;
   }
   $("ui-lang").value = I18N.lang;
+  renderWidgetList();
   $("accent-list").querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.c.toLowerCase() === s.ui.accent.toLowerCase()));
   const yes = (b) => (b ? `<span class="good">есть</span>` : `<span class="bad">нет</span>`);
   $("ver-info").textContent = `Версия ${state.version}` + (updateInfo?.available ? ` · доступна ${updateInfo.latest}` : "");
@@ -986,11 +1021,12 @@ function frame(now) {
   requestAnimationFrame(frame);
   // ~40 fps is plenty for a chart and keeps the CPU cool.
   if (now - lastFrame < 24 || document.hidden || !$("page-home").classList.contains("active") || !chartSeries) return;
+  if (!widgetOn("chart-ping") && !widgetOn("chart-loss")) return;
   lastFrame = now;
   const phase = Math.min(1, (now - lastTickAt) / 1000);
   const { key, series } = chartSeries;
-  Chart.line($("chart-ping"), series, { points: HISTORY, minMax: 20, phase });
-  Chart.line($("chart-loss"), key ? [{ color: "#ef4444", values: (history.get(key) ?? []).map((h) => h.loss) }] : [], { points: HISTORY, minMax: 5, phase, smoothing: false });
+  if (widgetOn("chart-ping")) Chart.line($("chart-ping"), series, { points: HISTORY, minMax: 20, phase });
+  if (widgetOn("chart-loss")) Chart.line($("chart-loss"), key ? [{ color: "#ef4444", values: (history.get(key) ?? []).map((h) => h.loss) }] : [], { points: HISTORY, minMax: 5, phase, smoothing: false });
 }
 requestAnimationFrame(frame);
 
@@ -1022,7 +1058,44 @@ refreshState().finally(async () => {
   if (shell) document.querySelector(`[data-shell="${shell}"]`)?.click();
   // ...and OPENLAG_START_PAGE=settings:#rd-host scrolls to an element.
   if (shell?.startsWith("#")) document.querySelector(shell)?.scrollIntoView({ block: "center" });
+  // ...and OPENLAG_START_PAGE=home:trace=1.1.1.1 runs a route check.
+  if (shell?.startsWith("trace=")) { await runTrace(shell.slice(6)); $("trace-table").scrollIntoView({ block: "center" }); }
   invoke("ui_ready");
 });
 // Pick up background changes (auto-refresh, xray restarts).
 setInterval(refreshState, 15000);
+
+// ---------------------------------------------------------------- route trace
+
+async function runTrace(target) {
+  target = target.trim();
+  if (!target) return;
+  $("trace-target").value = target;
+  const btn = $("trace-run");
+  btn.disabled = true;
+  btn.textContent = "Проверяю…";
+  $("trace-note").textContent = "";
+  try {
+    const r = await invoke("trace_route", { target });
+    const cls = (h) => (h.sent && h.lost === h.sent ? "bad" : h.lost ? "mid" : "");
+    $("trace-body").innerHTML = r.hops.map((h) => `<tr>
+      <td class="num">${h.ttl}</td>
+      <td class="mono">${h.ip ? esc(h.ip) : '<span class="muted">* узел не отвечает</span>'}</td>
+      <td class="num ${cls(h)}">${h.sent ? Math.round((h.lost / h.sent) * 100) : 0}%</td>
+      <td class="num">${fmtMs(h.best_ms)}</td>
+      <td class="num ${pingClass(h.avg_ms)}">${fmtMs(h.avg_ms)}</td>
+      <td class="num">${fmtMs(h.worst_ms)}</td></tr>`).join("");
+    $("trace-table").hidden = false;
+    $("trace-note").textContent = `${r.ip} · ${r.reached ? "сервер ответил" : "сервер не отвечает на ICMP"}`;
+  } catch (e) {
+    toast(ru(e), "error");
+  }
+  btn.disabled = false;
+  btn.textContent = "Проверить маршрут";
+}
+$("trace-run").addEventListener("click", () => runTrace($("trace-target").value));
+$("trace-target").addEventListener("keydown", (e) => { if (e.key === "Enter") runTrace(e.target.value); });
+$("flows").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-trace]");
+  if (b) runTrace(b.dataset.trace);
+});

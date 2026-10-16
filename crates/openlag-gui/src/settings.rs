@@ -157,6 +157,9 @@ pub struct UiPrefs {
     /// "ru" or "en"; empty until the UI first starts.
     #[serde(default)]
     pub lang: String,
+    /// Blocks the user switched off (charts, tiles...), by widget name.
+    #[serde(default)]
+    pub hidden: Vec<String>,
 }
 
 impl Default for UiPrefs {
@@ -168,6 +171,7 @@ impl Default for UiPrefs {
             ping_mid: 120,
             compact: false,
             lang: String::new(),
+            hidden: Vec::new(),
         }
     }
 }
@@ -182,6 +186,9 @@ pub struct ProcessGroup {
     /// Server for this group's programs ("only" mode); None follows the global choice.
     #[serde(default)]
     pub exit: Option<String>,
+    /// Tunnel only UDP of these programs; their TCP goes direct.
+    #[serde(default)]
+    pub udp_only: bool,
 }
 
 impl Settings {
@@ -311,6 +318,7 @@ pub fn load(path: &Path) -> Settings {
             enabled: true,
             processes: std::mem::take(&mut s.games),
             exit: None,
+            udp_only: false,
         });
     }
     if s.mode != "all_except" {

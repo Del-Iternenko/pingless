@@ -10,6 +10,7 @@ mod settings;
 mod speed;
 mod sys;
 mod term;
+mod trace;
 mod tray;
 mod update;
 
@@ -397,6 +398,15 @@ impl AppState {
                     .collect()
             },
             kill_switch: s.kill_switch,
+            udp_only: if s.all_except() {
+                Vec::new()
+            } else {
+                s.groups
+                    .iter()
+                    .filter(|g| g.enabled && g.udp_only)
+                    .flat_map(|g| g.processes.iter().cloned())
+                    .collect()
+            },
         })?;
         *self.sink.write() = Some(capture.downstream());
         capture.start(engine);
@@ -932,14 +942,18 @@ fn main() {
         *PENDING_LINK.lock() = Some(link);
     }
 
-    tauri::Builder::default()
-        // A second launch (or an openlag:// link) brings up the running one.
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+    let mut builder = tauri::Builder::default();
+    // A second launch (or an openlag:// link) brings up the running one. Dev builds
+    // skip it unless asked: they would hand over to an installed, elevated OpenLag.
+    if !cfg!(debug_assertions) || std::env::var_os("OPENLAG_SINGLE_INSTANCE").is_some() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             tray::show_window(app);
             if let Some(link) = argv.iter().find_map(|a| deep_link(a)) {
                 let _ = app.emit("deep-link", link);
             }
-        }))
+        }));
+    }
+    builder
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -1085,6 +1099,7 @@ fn main() {
             take_deep_link,
             set_extras,
             speed_test,
+            trace_route,
             export_settings,
             import_settings,
             relay_deploy,
@@ -1284,7 +1299,8 @@ fn show_on_start(app: &tauri::AppHandle) {
     if SHOWN_ONCE.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
-    let minimized = app.state::<Arc<AppState>>().settings.lock().start_minimized
+    let minimized = (app.state::<Arc<AppState>>().settings.lock().start_minimized
+        && std::env::var_os("OPENLAG_START_PAGE").is_none())
         || std::env::args().any(|a| a == "--minimized");
     if !minimized {
         tray::show_window(app);
@@ -1950,4 +1966,43 @@ mod link_tests {
         assert_eq!(deep_link("openlag://nonsense"), None);
         assert_eq!(deep_link("--minimized"), None);
     }
+}
+
+#[derive(Serialize)]
+struct TraceView {
+    ip: String,
+    reached: bool,
+    hops: Vec<trace::Hop>,
+}
+
+/// MTR-style route check to an IP or host name, directly from the network card.
+#[tauri::command]
+async fn trace_route(target: String) -> CmdResult<TraceView> {
+    let target = target.trim().to_string();
+    let ip: std::net::Ipv4Addr = match target.parse() {
+        Ok(ip) => ip,
+        Err(_) => tokio::net::lookup_host((target.as_str(), 0))
+            .await
+            .map_err(|e| {
+                tr!(
+                    "не удалось найти {target}: {e}",
+                    "cannot resolve {target}: {e}"
+                )
+            })?
+            .find_map(|a| match a.ip() {
+                std::net::IpAddr::V4(v4) => Some(v4),
+                _ => None,
+            })
+            .ok_or_else(|| tr!("у {target} нет IPv4-адреса", "{target} has no IPv4 address"))?,
+    };
+    let source = openlag_proxy::physical_interface().and_then(|i| i.ipv4);
+    let hops = tauri::async_runtime::spawn_blocking(move || trace::trace(ip, source, 4))
+        .await
+        .map_err(|e| e.to_string())?;
+    let reached = hops.last().and_then(|h| h.ip.as_deref()) == Some(ip.to_string().as_str());
+    Ok(TraceView {
+        ip: ip.to_string(),
+        reached,
+        hops,
+    })
 }

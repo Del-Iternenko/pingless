@@ -164,6 +164,18 @@ const I18N = (() => {
       "While optimization is on, the programs in your groups get high CPU priority, like the “boost” of paid game VPNs. Turn optimization off and the priority goes back to normal.",
     "Резервная копия: подписки, группы, фильтры и SSH-серверы. Пароли SSH расшифруются только на этом ПК.":
       "Backup: subscriptions, groups, filters and SSH servers. SSH passwords only decrypt on this PC.",
+    "Только UDP (игра), TCP напрямую": "UDP only (the game), TCP direct",
+    "Через VPN идёт только UDP, то есть сама игра. Лаунчер, загрузки и чат по TCP остаются напрямую на полной скорости":
+      "Only UDP, the game itself, goes through the VPN. The launcher, downloads and chat over TCP stay direct at full speed",
+    "Маршрут до сервера": "Route to server", "Проверить маршрут": "Check route", "Проверяю…": "Checking…",
+    "Как WinMTR: показывает каждый узел по пути от вашей сетевой карты до сервера игры напрямую, без VPN, с потерями и пингом. Видно, где растёт задержка: дома, у провайдера или дальше. Нажмите ↯ у соединения или введите адрес.":
+      "Like WinMTR: shows every hop from your network card to the game server, directly, without VPN, with loss and ping. You can see where the delay grows: at home, at your ISP or further on. Click ↯ next to a connection or enter an address.",
+    "IP или адрес сервера, например 155.133.248.34": "Server IP or address, e.g. 155.133.248.34",
+    "Узел": "Hop", "Лучший": "Best", "Средний": "Avg", "Худший": "Worst", "* узел не отвечает": "* no answer",
+    "Что показывать": "What to show", "Выключенные блоки не рисуются и не тратят процессор.": "Hidden blocks are not drawn and cost no CPU.",
+    "Большой пинг на главной": "Big ping on Home", "Плитки: джиттер, потери, сравнение, соединения": "Tiles: jitter, loss, comparison, connections",
+    "График пинга": "Ping chart", "График потерь": "Loss chart", "Таблица соединений": "Connections table", "Проверка маршрута": "Route check",
+    "Страны выхода на «Серверах»": "Exit countries on “Servers”", "Фильтры на «Серверах»": "Filters on “Servers”", "Мини-графики у серверов": "Server sparklines",
     "Восстановить…": "Restore…", "Сохранить копию…": "Save backup…", "Резервная копия сохранена": "Backup saved", "Настройки восстановлены": "Settings restored",
   };
   const EN = new Map(Object.entries(EN_RAW).map(([k, v]) => [norm(k), v]));
@@ -232,6 +244,8 @@ const I18N = (() => {
     [/^Не удалось включить: (.+)$/, "Could not turn on: $1"],
     [/^Сервер подписки ответил ошибкой HTTP (\d+)$/, "The subscription server answered HTTP $1"],
     [/^Тест скорости: (.+)…$/, "Speed test: $1…"],
+    [/^(.+) · сервер ответил$/, "$1 · server answered"],
+    [/^(.+) · сервер не отвечает на ICMP$/, "$1 · the server does not answer ICMP"],
     [/^(.+): ([\d.]+) Мбит\/с · отклик (\d+) мс$/, "$1: $2 Mbit/s · response $3 ms"],
     // Traffic "1.2 ГБ из 50 ГБ"; kept last so longer sentences with "из" match first.
     [/^([\d.,]+ \S+) из ([\d.,]+ \S+)$/, "$1 of $2"],
