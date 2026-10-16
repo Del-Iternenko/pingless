@@ -340,6 +340,14 @@
       </div>
       <div class="card form">
         <div class="card-head"><h3>Свои relay-серверы</h3></div>
+        <p class="hint">Есть VPS с Linux? OpenLag сам поставит на него relay — свой выходной узел рядом с игровыми серверами. Нужен вход по SSH под root или с sudo: сервер добавляется во вкладке «Терминал».</p>
+        <div class="row wrap">
+          <label class="field" style="flex:2;min-width:160px"><span>Сервер</span><select id="rd-host"></select></label>
+          <label class="field" style="flex:2;min-width:140px"><span>Название в OpenLag</span><input id="rd-name" placeholder="Франкфурт"></label>
+          <label class="field" style="flex:1;min-width:90px"><span>UDP-порт</span><input id="rd-port" type="number" value="7000" min="1024" max="65535"></label>
+        </div>
+        <div class="row end"><button class="btn" id="rd-remove">Удалить с сервера</button><button class="btn primary" id="rd-deploy">Установить relay</button></div>
+        <label class="field"><span>Вручную (TOML): ключ и маршруты, в том числе через мосты</span></label>
         <textarea id="opt-relays" rows="8" spellcheck="false" placeholder='psk = "секрет"&#10;&#10;[[exits]]&#10;name = "Франкфурт"&#10;routes = [&#10;  { name = "direct", via = "203.0.113.10:7000" },&#10;  { name = "bridge", via = "198.51.100.20:7001" },&#10;]'></textarea>
         <div class="row end"><button class="btn" id="relays-save">Сохранить relay</button></div>
       </div>

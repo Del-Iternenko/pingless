@@ -21,6 +21,17 @@ function Invoke-Cargo {
 Write-Host '== building OpenLag'
 Invoke-Cargo build --release -p openlag-gui
 
+# Static Linux builds of the relay, uploaded by "install relay on my server".
+# rust-lld links musl without a cross toolchain; blake3 is built without C (pure).
+Write-Host '== building Linux relays'
+$env:CARGO_FEATURE_PURE = '1'
+foreach ($t in 'x86_64', 'aarch64') {
+    $triple = "$t-unknown-linux-musl"
+    Set-Item "env:CARGO_TARGET_$($triple.ToUpper().Replace('-', '_'))_LINKER" 'rust-lld'
+    Invoke-Cargo build --release -p openlag-relay --target $triple
+}
+Remove-Item env:CARGO_FEATURE_PURE
+
 Write-Host '== staging payload'
 $payload = Join-Path $env:CARGO_TARGET_DIR 'payload'
 Remove-Item $payload -Recurse -Force -ErrorAction SilentlyContinue
@@ -30,6 +41,10 @@ New-Item -ItemType Directory -Force (Join-Path $core 'licenses'), (Join-Path $ex
 
 Copy-Item (Join-Path $release 'openlag-gui.exe') (Join-Path $core 'OpenLag.exe')
 Copy-Item LICENSE-MIT (Join-Path $core 'licenses\OpenLag-LICENSE.txt')
+$relayDir = New-Item -ItemType Directory -Force (Join-Path $core 'relay')
+foreach ($t in 'x86_64', 'aarch64') {
+    Copy-Item (Join-Path $env:CARGO_TARGET_DIR "$t-unknown-linux-musl\release\openlag-relay") (Join-Path $relayDir "openlag-relay-$t")
+}
 
 $wd = 'vendor\WinDivert-2.2.2-A'
 Copy-Item 'vendor\xray\xray.exe' (Join-Path $extras 'openlag-xray.exe')

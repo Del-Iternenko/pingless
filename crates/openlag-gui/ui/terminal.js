@@ -47,7 +47,9 @@ const Term = (() => {
     try {
       id = kind === "local"
         ? await invoke("term_open_local", { shell: arg, cols: term.cols, rows: term.rows })
-        : await invoke("term_open_ssh", { id: arg, cols: term.cols, rows: term.rows });
+        : kind === "task"
+          ? await arg()
+          : await invoke("term_open_ssh", { id: arg, cols: term.cols, rows: term.rows });
     } catch (e) {
       pane.remove();
       term.dispose();
@@ -203,6 +205,8 @@ const Term = (() => {
 
   return {
     render(state) { renderHosts(state.settings.ssh_hosts ?? []); },
+    // Output-only tab of a background job; `start` resolves to its terminal id.
+    openTask(title, start) { return open("task", start, title); },
     focus() { const s = sessions.get(active); if (s) requestAnimationFrame(() => { s.fit.fit(); s.term.focus(); }); },
   };
 })();

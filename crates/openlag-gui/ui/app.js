@@ -715,6 +715,13 @@ function renderSettings() {
     $("opt-ua").value = s.user_agent;
     $("opt-bypass").checked = s.bypass_tun;
     $("opt-relays").value = s.relays_toml;
+    const hosts = s.ssh_hosts ?? [];
+    const keep = $("rd-host").value;
+    $("rd-host").innerHTML = hosts.length
+      ? hosts.map((h) => `<option value="${esc(h.id)}">${esc(h.name)} — ${esc(h.host)}</option>`).join("")
+      : `<option value="">Сначала добавьте сервер во вкладке «Терминал»</option>`;
+    if (hosts.some((h) => h.id === keep)) $("rd-host").value = keep;
+    $("rd-deploy").disabled = $("rd-remove").disabled = !hosts.length;
     $("opt-autostart").checked = s.autostart;
     $("opt-minimized").checked = s.start_minimized;
     $("opt-tray").checked = s.close_to_tray;
@@ -794,6 +801,21 @@ $("opt-kill").addEventListener("change", async (e) => {
     await call("set_kill_switch", { on: e.target.checked }, e.target.checked ? "Kill switch включён: без сервера трафик выбранных программ блокируется" : "Kill switch выключен");
   } catch { e.target.checked = !e.target.checked; }
   await refreshState();
+});
+function relayTask(cmd, title) {
+  const hostId = $("rd-host").value;
+  if (!hostId) return;
+  const name = $("rd-name").value.trim();
+  const port = Number($("rd-port").value) || 7000;
+  if (port < 1024 || port > 65535) { toast("Порт должен быть от 1024 до 65535", "error"); return; }
+  document.querySelector('.nav[data-page="term"]').click();
+  Term.openTask(title, () => invoke(cmd, { hostId, name, port }));
+}
+$("rd-deploy").addEventListener("click", () => relayTask("relay_deploy", "Установка relay"));
+$("rd-remove").addEventListener("click", () => relayTask("relay_remove", "Удаление relay"));
+window.__TAURI__.event.listen("relays-changed", async () => {
+  await refreshState();
+  toast("Relay-серверы обновлены");
 });
 $("relays-save").addEventListener("click", async () => {
   try { await call("set_relays", { text: $("opt-relays").value }, "Relay-серверы сохранены"); } catch { /* toast */ }
@@ -927,6 +949,8 @@ refreshState().finally(async () => {
   // Development aid: OPENLAG_START_PAGE=term:powershell also opens a shell.
   const shell = page?.split(":")[1];
   if (shell) document.querySelector(`[data-shell="${shell}"]`)?.click();
+  // ...and OPENLAG_START_PAGE=settings:#rd-host scrolls to an element.
+  if (shell?.startsWith("#")) document.querySelector(shell)?.scrollIntoView({ block: "center" });
   invoke("ui_ready");
 });
 // Pick up background changes (auto-refresh, xray restarts).

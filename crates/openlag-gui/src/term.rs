@@ -40,6 +40,8 @@ enum Session {
     Ssh {
         tx: mpsc::UnboundedSender<SshCmd>,
     },
+    /// Output-only session of a background job.
+    Task,
 }
 
 enum SshCmd {
@@ -71,7 +73,7 @@ pub struct SshHost {
     pub secret: String,
 }
 
-fn emit_data(app: &AppHandle, id: u32, bytes: &[u8]) {
+pub(crate) fn emit_data(app: &AppHandle, id: u32, bytes: &[u8]) {
     let _ = app.emit(
         "term-data",
         Data {
@@ -81,7 +83,7 @@ fn emit_data(app: &AppHandle, id: u32, bytes: &[u8]) {
     );
 }
 
-fn emit_exit(app: &AppHandle, id: u32, reason: impl Into<String>) {
+pub(crate) fn emit_exit(app: &AppHandle, id: u32, reason: impl Into<String>) {
     let _ = app.emit(
         "term-exit",
         Exit {
@@ -187,6 +189,19 @@ impl Terminals {
         Ok(id)
     }
 
+    /// Registers an output-only tab for a background job; the caller prints with
+    /// `emit_data` and ends it with `finish_task`.
+    pub fn open_task(&self) -> u32 {
+        let id = self.new_id();
+        self.sessions.lock().insert(id, Session::Task);
+        id
+    }
+
+    pub fn finish_task(&self, app: &AppHandle, id: u32, reason: impl Into<String>) {
+        self.sessions.lock().remove(&id);
+        emit_exit(app, id, reason);
+    }
+
     pub fn write(&self, id: u32, data: &[u8]) -> Result<()> {
         let mut sessions = self.sessions.lock();
         match sessions.get_mut(&id).context("terminal is closed")? {
@@ -197,6 +212,7 @@ impl Terminals {
             Session::Ssh { tx } => {
                 let _ = tx.send(SshCmd::Write(data.to_vec()));
             }
+            Session::Task => {}
         }
         Ok(())
     }
@@ -213,6 +229,7 @@ impl Terminals {
             Session::Ssh { tx } => {
                 let _ = tx.send(SshCmd::Resize(cols as u32, rows as u32));
             }
+            Session::Task => {}
         }
         Ok(())
     }
@@ -226,6 +243,7 @@ impl Terminals {
                 Session::Ssh { tx } => {
                     let _ = tx.send(SshCmd::Close);
                 }
+                Session::Task => {}
             }
         }
     }
@@ -242,7 +260,7 @@ impl Terminals {
 
 /// Trust on first use, like OpenSSH's known_hosts: the first key seen for host:port
 /// is saved; a different key later refuses the connection (possible interception).
-struct Client {
+pub(crate) struct Client {
     host_id: String,
     known_hosts: PathBuf,
     app: AppHandle,
@@ -294,18 +312,15 @@ impl russh::client::Handler for Client {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn ssh_session(
+/// Connects and logs in to a saved server; progress and the host key notice go to
+/// terminal `id`.
+pub(crate) async fn connect(
     app: &AppHandle,
     id: u32,
     host: &SshHost,
     password: &str,
     known_hosts: &std::path::Path,
-    cols: u16,
-    rows: u16,
-    mut rx: mpsc::UnboundedReceiver<SshCmd>,
-) -> Result<()> {
-    use russh::ChannelMsg;
+) -> Result<russh::client::Handle<Client>> {
     emit_data(
         app,
         id,
@@ -356,6 +371,22 @@ async fn ssh_session(
     if !ok {
         bail!("сервер отклонил вход: проверьте пользователя и пароль или ключ");
     }
+    Ok(session)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ssh_session(
+    app: &AppHandle,
+    id: u32,
+    host: &SshHost,
+    password: &str,
+    known_hosts: &std::path::Path,
+    cols: u16,
+    rows: u16,
+    mut rx: mpsc::UnboundedReceiver<SshCmd>,
+) -> Result<()> {
+    use russh::ChannelMsg;
+    let session = connect(app, id, host, password, known_hosts).await?;
 
     let mut channel = session.channel_open_session().await?;
     channel

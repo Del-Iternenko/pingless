@@ -2,6 +2,7 @@
 
 mod compare;
 mod geo;
+mod relay;
 mod secret;
 mod settings;
 mod sys;
@@ -1012,6 +1013,8 @@ fn main() {
             open_url,
             set_kill_switch,
             set_conn,
+            relay_deploy,
+            relay_remove,
             start_page,
         ])
         .build(tauri::generate_context!())
@@ -1485,4 +1488,117 @@ async fn set_conn(st: Shared<'_>, conn: settings::ConnPrefs) -> CmdResult<()> {
     st.save().map_err(err)?;
     st.rebuild().await;
     Ok(())
+}
+
+fn ssh_host_with_password(st: &AppState, id: &str) -> CmdResult<(term::SshHost, String)> {
+    let host = st
+        .settings
+        .lock()
+        .ssh_hosts
+        .iter()
+        .find(|h| h.id == id)
+        .cloned()
+        .ok_or("server not found")?;
+    let password = secret::unprotect(&host.secret).map_err(err)?;
+    Ok((host, password))
+}
+
+/// Installs our relay on a saved SSH server and adds it to the relays; the install
+/// log goes to the returned terminal tab.
+#[tauri::command]
+fn relay_deploy(
+    app: tauri::AppHandle,
+    st: Shared<'_>,
+    host_id: String,
+    name: String,
+    port: u16,
+) -> CmdResult<u32> {
+    let (host, password) = ssh_host_with_password(&st, &host_id)?;
+    let psk = settings::parse_relays(&st.settings.lock().relays_toml)
+        .map_err(err)?
+        .psk;
+    let psk = if psk.is_empty() {
+        format!(
+            "{:016x}{:016x}",
+            rand::random::<u64>(),
+            rand::random::<u64>()
+        )
+    } else {
+        psk
+    };
+    let name = Some(name.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| host.name.clone());
+    let id = st.terminals.open_task();
+    let state = st.inner().clone();
+    tauri::async_runtime::spawn(async move {
+        let dirs = [exe_dir()];
+        let res = relay::deploy(
+            &app,
+            id,
+            &host,
+            &password,
+            &known_hosts_path(&state),
+            &dirs,
+            port,
+            &psk,
+        )
+        .await
+        .and_then(|d| {
+            let mut s = state.settings.lock();
+            s.relays_toml = relay::add_exit(&s.relays_toml, &psk, &name, d.via)?;
+            drop(s);
+            state.save()
+        });
+        let reason = match res {
+            Ok(()) => {
+                state.rebuild().await;
+                let _ = app.emit("relays-changed", ());
+                format!("relay «{name}» установлен и добавлен в OpenLag")
+            }
+            Err(e) => {
+                term::emit_data(&app, id, format!("\r\n\x1b[31m{e:#}\x1b[0m\r\n").as_bytes());
+                "установка не удалась".into()
+            }
+        };
+        state.terminals.finish_task(&app, id, reason);
+    });
+    Ok(id)
+}
+
+#[tauri::command]
+fn relay_remove(
+    app: tauri::AppHandle,
+    st: Shared<'_>,
+    host_id: String,
+    name: String,
+    port: u16,
+) -> CmdResult<u32> {
+    let _ = (name, port);
+    let (host, password) = ssh_host_with_password(&st, &host_id)?;
+    let id = st.terminals.open_task();
+    let state = st.inner().clone();
+    tauri::async_runtime::spawn(async move {
+        let res = relay::remove(&app, id, &host, &password, &known_hosts_path(&state))
+            .await
+            .and_then(|ip| {
+                let mut s = state.settings.lock();
+                s.relays_toml = relay::remove_exit(&s.relays_toml, &ip.to_string())?;
+                drop(s);
+                state.save()
+            });
+        let reason = match res {
+            Ok(()) => {
+                state.rebuild().await;
+                let _ = app.emit("relays-changed", ());
+                "relay удалён".to_string()
+            }
+            Err(e) => {
+                term::emit_data(&app, id, format!("\r\n\x1b[31m{e:#}\x1b[0m\r\n").as_bytes());
+                "удаление не удалось".into()
+            }
+        };
+        state.terminals.finish_task(&app, id, reason);
+    });
+    Ok(id)
 }
