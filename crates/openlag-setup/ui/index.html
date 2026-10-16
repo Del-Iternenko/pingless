@@ -13,6 +13,7 @@
     <img src="logo.png" alt="" width="20" height="20" data-tauri-drag-region>
     <span data-tauri-drag-region>OpenLag · <span id="ver"></span></span>
     <span class="grow" data-tauri-drag-region></span>
+    <button class="tb lang" id="btn-lang" title="Язык · Language">EN</button>
     <button class="tb" id="btn-min" aria-label="Свернуть"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
     <button class="tb close" id="btn-close" aria-label="Закрыть"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
   </header>
@@ -41,7 +42,7 @@
       <div class="features">
         <div><b>Multipath</b><span>пакет летит по 2–4 маршрутам, доходит первый</span></div>
         <div><b>По процессам</b><span>через туннель только то, что вы выбрали</span></div>
-        <div><b>Подписки</b><span>Happ, Incy, Amnezia, vless, vmess, trojan, ss</span></div>
+        <div><b>Подписки</b><span>Happ, Incy, Amnezia, vless, vmess, trojan, ss, WireGuard</span></div>
         <div><b>Живой пинг</b><span>графики пинга, джиттера и потерь</span></div>
       </div>
       <div class="actions"><span class="grow"></span><button class="btn primary" data-next>Далее</button></div>
@@ -114,6 +115,8 @@
   </main>
 
   <div class="error" id="error" hidden></div>
+  <script src="i18n.js"></script>
+  <script src="i18n-setup.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

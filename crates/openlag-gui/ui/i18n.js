@@ -283,6 +283,11 @@ const I18N = (() => {
     t(ru) { return lang === "en" ? (translate(ru) ?? ru) : ru; },
     start,
     preview(l) { lang = l; },
+    /** More phrases (the installer has its own); its patterns are tried first. */
+    add(raw, patterns = []) {
+      for (const [k, v] of Object.entries(raw)) EN.set(norm(k), v);
+      PATTERNS.unshift(...patterns);
+    },
     /** Switches language; the page reloads so everything renders fresh. */
     set(l) {
       try { localStorage.setItem("openlag-lang", l); } catch { /* ignore */ }

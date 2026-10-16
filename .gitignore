@@ -8,5 +8,6 @@ docs/exitlag-analysis.md
 /vendor
 /crates/openlag-gui/gen
 /crates/openlag-setup/ui/music.mp3
+/crates/openlag-setup/ui/i18n.js
 /crates/openlag-setup/gen
 /dist

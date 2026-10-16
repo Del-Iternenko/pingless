@@ -38,6 +38,11 @@ fn main() {
         .unwrap_or_else(|_| manifest.join("../../vendor/setup/music.mp3"));
     println!("cargo:rerun-if-env-changed=OPENLAG_SETUP_MUSIC");
     println!("cargo:rerun-if-changed={}", music.display());
+    // The translator is shared with the app.
+    let i18n = manifest.join("../openlag-gui/ui/i18n.js");
+    println!("cargo:rerun-if-changed={}", i18n.display());
+    std::fs::copy(&i18n, manifest.join("ui/i18n.js")).expect("copy i18n.js");
+
     let dest = manifest.join("ui/music.mp3");
     // OPENLAG_SETUP_MUSIC=none builds the public installer without a track (the UI
     // then plays music.mp3 found next to the exe, or hides the player).
