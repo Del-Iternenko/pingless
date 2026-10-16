@@ -88,9 +88,9 @@ const Chart = (() => {
     }
     ctx.textBaseline = "alphabetic";
     ctx.textAlign = "left";
-    ctx.fillText(`${points} с назад`, pad.l, h - 3);
+    ctx.fillText(I18N.t(`${points} с назад`), pad.l, h - 3);
     ctx.textAlign = "right";
-    ctx.fillText("сейчас", w - pad.r, h - 3);
+    ctx.fillText(I18N.t("сейчас"), w - pad.r, h - 3);
 
     const stepX = cw / Math.max(points - 1, 1);
     const yOf = (v) => pad.t + ch - (ch * Math.min(v, max)) / max;

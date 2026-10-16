@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod compare;
+#[macro_use]
+mod i18n;
 mod geo;
 mod relay;
 mod secret;
@@ -725,9 +727,12 @@ async fn pick_config_file(app: tauri::AppHandle) -> CmdResult<Option<String>> {
     let file = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
-            .set_title("Файл с ключами или конфигом")
-            .add_filter("Конфиги", &["conf", "txt", "json", "vpn"])
-            .add_filter("Все файлы", &["*"])
+            .set_title(tr!(
+                "Файл с ключами или конфигом",
+                "File with keys or a config"
+            ))
+            .add_filter(tr!("Конфиги", "Configs"), &["conf", "txt", "json", "vpn"])
+            .add_filter(tr!("Все файлы", "All files"), &["*"])
             .blocking_pick_file()
     })
     .await
@@ -737,7 +742,10 @@ async fn pick_config_file(app: tauri::AppHandle) -> CmdResult<Option<String>> {
     };
     let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
     if meta.len() > 4 << 20 {
-        return Err("файл больше 4 МБ: это не конфиг".into());
+        return Err(tr!(
+            "файл больше 4 МБ: это не конфиг",
+            "the file is over 4 MB: not a config"
+        ));
     }
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
     Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
@@ -749,8 +757,8 @@ async fn pick_exe(app: tauri::AppHandle) -> CmdResult<Vec<String>> {
     let files = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
-            .set_title("Выберите программы")
-            .add_filter("Программы", &["exe"])
+            .set_title(tr!("Выберите программы", "Choose programs"))
+            .add_filter(tr!("Программы", "Programs"), &["exe"])
             .blocking_pick_files()
     })
     .await
@@ -821,6 +829,7 @@ async fn set_filters(st: Shared<'_>, keywords: Vec<String>) -> CmdResult<()> {
 
 #[tauri::command]
 async fn set_ui_prefs(st: Shared<'_>, ui: settings::UiPrefs) -> CmdResult<()> {
+    i18n::set(&ui.lang);
     st.settings.lock().ui = ui;
     st.save().map_err(err)
 }
@@ -912,6 +921,7 @@ fn main() {
             let data_dir = app.path().app_data_dir()?;
             let settings_path = data_dir.join("settings.json");
             let settings = settings::load(&settings_path);
+            i18n::set(&settings.ui.lang);
             let state = Arc::new(AppState {
                 settings: parking_lot::Mutex::new(settings),
                 settings_path,
@@ -1117,7 +1127,13 @@ async fn auto_connect(st: Arc<AppState>, handle: tauri::AppHandle) {
                     match st.start_capture(&mut net) {
                         Ok(()) => {
                             net.auto_started = true;
-                            let _ = handle.emit("auto", format!("Запущен {name}: туннель включён"));
+                            let _ = handle.emit(
+                                "auto",
+                                tr!(
+                                    "Запущен {name}: туннель включён",
+                                    "{name} started: tunnel on"
+                                ),
+                            );
                         }
                         Err(e) => {
                             net.error = Some(format!("{e:#}"));
@@ -1136,7 +1152,10 @@ async fn auto_connect(st: Arc<AppState>, handle: tauri::AppHandle) {
                     net.auto_started = false;
                     let _ = handle.emit(
                         "auto",
-                        "Программы из списка закрыты: туннель выключен".to_string(),
+                        tr!(
+                            "Программы из списка закрыты: туннель выключен",
+                            "Listed programs closed: tunnel off"
+                        ),
                     );
                 }
             }
@@ -1471,7 +1490,10 @@ fn ssh_forget_key(st: Shared<'_>, host: String, port: u16) -> CmdResult<()> {
 async fn pick_key_file(app: tauri::AppHandle) -> CmdResult<Option<String>> {
     use tauri_plugin_dialog::DialogExt;
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        let mut d = app.dialog().file().set_title("Приватный SSH-ключ");
+        let mut d = app
+            .dialog()
+            .file()
+            .set_title(tr!("Приватный SSH-ключ", "Private SSH key"));
         if let Some(home) = std::env::var_os("USERPROFILE") {
             d = d.set_directory(PathBuf::from(home).join(".ssh"));
         }
@@ -1580,11 +1602,14 @@ fn relay_deploy(
             Ok(()) => {
                 state.rebuild().await;
                 let _ = app.emit("relays-changed", ());
-                format!("relay «{name}» установлен и добавлен в OpenLag")
+                tr!(
+                    "relay «{name}» установлен и добавлен в OpenLag",
+                    "relay “{name}” installed and added to OpenLag"
+                )
             }
             Err(e) => {
                 term::emit_data(&app, id, format!("\r\n\x1b[31m{e:#}\x1b[0m\r\n").as_bytes());
-                "установка не удалась".into()
+                tr!("установка не удалась", "installation failed")
             }
         };
         state.terminals.finish_task(&app, id, reason);
@@ -1617,11 +1642,11 @@ fn relay_remove(
             Ok(()) => {
                 state.rebuild().await;
                 let _ = app.emit("relays-changed", ());
-                "relay удалён".to_string()
+                tr!("relay удалён", "relay removed")
             }
             Err(e) => {
                 term::emit_data(&app, id, format!("\r\n\x1b[31m{e:#}\x1b[0m\r\n").as_bytes());
-                "удаление не удалось".into()
+                tr!("удаление не удалось", "removal failed")
             }
         };
         state.terminals.finish_task(&app, id, reason);

@@ -40,7 +40,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         &[&MenuItem::with_id(
             app,
             "open",
-            "Открыть OpenLag",
+            &tr!("Открыть OpenLag", "Open OpenLag"),
             true,
             None::<&str>,
         )?],
@@ -111,14 +111,14 @@ pub fn update(app: &AppHandle, capturing: bool, preferred: Option<&str>, servers
         .and_then(|p| servers.iter().find(|s| s.key == p))
         .or_else(|| servers.first())
         .map(|s| match s.ping_ms {
-            Some(p) => format!("{} · {p:.0} мс", s.label),
+            Some(p) => tr!("{} · {p:.0} мс", "{} · {p:.0} ms", s.label),
             None => s.label.clone(),
         })
         .unwrap_or_default();
     let state = if capturing {
-        "включено"
+        tr!("включено", "on")
     } else {
-        "выключено"
+        tr!("выключено", "off")
     };
     let _ = tray.set_tooltip(Some(if current.is_empty() {
         format!("OpenLag: {state}")
@@ -137,14 +137,26 @@ fn build_menu(
     preferred: Option<&str>,
     servers: &[TrayServer],
 ) -> tauri::Result<Menu<tauri::Wry>> {
-    let open = MenuItem::with_id(app, "open", "Открыть OpenLag", true, None::<&str>)?;
-    let toggle =
-        CheckMenuItem::with_id(app, "toggle", "Оптимизация", true, capturing, None::<&str>)?;
-    let srv = Submenu::with_id(app, "servers", "Сервер", true)?;
+    let open = MenuItem::with_id(
+        app,
+        "open",
+        &tr!("Открыть OpenLag", "Open OpenLag"),
+        true,
+        None::<&str>,
+    )?;
+    let toggle = CheckMenuItem::with_id(
+        app,
+        "toggle",
+        tr!("Оптимизация", "Optimization"),
+        true,
+        capturing,
+        None::<&str>,
+    )?;
+    let srv = Submenu::with_id(app, "servers", tr!("Сервер", "Server"), true)?;
     srv.append(&CheckMenuItem::with_id(
         app,
         "srv:auto",
-        "Авто (лучший пинг)",
+        tr!("Авто (лучший пинг)", "Auto (best ping)"),
         true,
         preferred.is_none(),
         None::<&str>,
@@ -154,8 +166,8 @@ fn build_menu(
     }
     for (i, s) in servers.iter().enumerate() {
         let label = match s.ping_ms {
-            Some(p) => format!("{}   {p:.0} мс", s.label),
-            None => format!("{}   нет ответа", s.label),
+            Some(p) => tr!("{}   {p:.0} мс", "{}   {p:.0} ms", s.label),
+            None => tr!("{}   нет ответа", "{}   no reply", s.label),
         };
         let checked = preferred == Some(s.key.as_str());
         srv.append(&CheckMenuItem::with_id(
@@ -167,7 +179,7 @@ fn build_menu(
             None::<&str>,
         )?)?;
     }
-    let quit = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", tr!("Выход", "Quit"), true, None::<&str>)?;
     Menu::with_items(
         app,
         &[
@@ -194,7 +206,10 @@ fn on_menu(app: &AppHandle, id: &str) {
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = st.toggle_capture().await {
                     show_window(&app);
-                    let _ = app.emit("notify", format!("Не удалось включить: {e:#}"));
+                    let _ = app.emit(
+                        "notify",
+                        tr!("Не удалось включить: {e:#}", "Could not turn on: {e:#}"),
+                    );
                 }
                 SHOWN.lock().take(); // force a menu refresh with the new state
                 let _ = app.emit("refresh", ());

@@ -148,6 +148,9 @@ pub struct UiPrefs {
     pub ping_good: u32,
     pub ping_mid: u32,
     pub compact: bool,
+    /// "ru" or "en"; empty until the UI first starts.
+    #[serde(default)]
+    pub lang: String,
 }
 
 impl Default for UiPrefs {
@@ -158,6 +161,7 @@ impl Default for UiPrefs {
             ping_good: 60,
             ping_mid: 120,
             compact: false,
+            lang: String::new(),
         }
     }
 }

@@ -17,9 +17,10 @@ const history = new Map(); // exit key -> [{ rtt, loss }]
 const warmup = new Map(); // exit key -> ticks seen alive
 
 const $ = (id) => document.getElementById(id);
-const regionNames = new Intl.DisplayNames(["ru"], { type: "region" });
+let regionNames = null;
 function countryName(cc) {
-  try { return regionNames.of(cc) ?? cc; } catch { return cc; }
+  if (regionNames?.lang !== I18N.lang) regionNames = { lang: I18N.lang, names: new Intl.DisplayNames([I18N.lang], { type: "region" }) };
+  try { return regionNames.names.of(cc) ?? cc; } catch { return cc; }
 }
 function flagHtml(cc) {
   return cc && /^[A-Z]{2}$/.test(cc)
@@ -56,6 +57,8 @@ const RU = [
 ];
 function ru(msg) {
   msg = String(msg);
+  // The backend speaks English; in English mode its messages are shown as is.
+  if (I18N.lang === "en") return msg;
   for (const [re, text] of RU) {
     const m = msg.match(re);
     if (m) return text ? text.replace("$1", m[1] ?? "") : msg;
@@ -126,7 +129,7 @@ function fmtBytes(n) {
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
   return `${n.toFixed(i ? 1 : 0)} ${u[i]}`;
 }
-function fmtDate(sec) { return sec ? new Date(sec * 1000).toLocaleDateString("ru-RU") : "—"; }
+function fmtDate(sec) { return sec ? new Date(sec * 1000).toLocaleDateString(I18N.lang === "en" ? "en-GB" : "ru-RU") : "—"; }
 function ago(sec) {
   const d = Math.floor(Date.now() / 1000) - sec;
   if (d < 60) return "только что";
@@ -752,6 +755,7 @@ function renderSettings() {
     $("ui-compact").checked = s.ui.compact;
     settingsFilled = true;
   }
+  $("ui-lang").value = I18N.lang;
   $("accent-list").querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.c.toLowerCase() === s.ui.accent.toLowerCase()));
   const yes = (b) => (b ? `<span class="good">есть</span>` : `<span class="bad">нет</span>`);
   $("ver-info").textContent = `Версия ${state.version}` + (updateInfo?.available ? ` · доступна ${updateInfo.latest}` : "");
@@ -776,6 +780,10 @@ async function saveUi(patch) {
 $("accent-list").querySelectorAll("button").forEach((b) => {
   b.style.background = b.dataset.c;
   b.addEventListener("click", () => saveUi({ accent: b.dataset.c }));
+});
+$("ui-lang").addEventListener("change", async (e) => {
+  await saveUi({ lang: e.target.value });
+  I18N.set(e.target.value);
 });
 $("ui-save").addEventListener("click", () => {
   const good = Math.max(1, Number($("ui-good").value) || 60);
@@ -952,7 +960,13 @@ Fun.init();
 // The window is created hidden and shown after the first render: no white flash and
 // no half-drawn page, like a native app.
 refreshState().finally(async () => {
-  const page = await invoke("start_page").catch(() => null);
+  let page = await invoke("start_page").catch(() => null);
+  // Development aid: OPENLAG_START_PAGE=en/servers previews English without saving it.
+  if (page?.startsWith("en/")) { I18N.preview("en"); page = page.slice(3); }
+  // The saved language wins; switching reloads the page before it is shown.
+  else if (state?.settings.ui.lang) I18N.sync(state.settings.ui.lang);
+  else if (state) saveUi({ lang: I18N.lang }).catch(() => {});
+  I18N.start();
   if (page) document.querySelector(`.nav[data-page="${page.split(":")[0]}"]`)?.click();
   // Development aid: OPENLAG_START_PAGE=term:powershell also opens a shell.
   const shell = page?.split(":")[1];

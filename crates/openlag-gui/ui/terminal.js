@@ -112,7 +112,7 @@ const Term = (() => {
     if (!s) return;
     s.alive = false;
     s.tab.classList.add("ended");
-    s.term.write(`\r\n\x1b[90m— ${e.payload.reason}. Закройте вкладку или откройте новую сессию.\x1b[0m\r\n`);
+    s.term.write(`\r\n\x1b[90m— ${e.payload.reason}. ${I18N.lang === "en" ? "Close the tab or open a new session." : "Закройте вкладку или откройте новую сессию."}\x1b[0m\r\n`);
   });
 
   new ResizeObserver(() => {

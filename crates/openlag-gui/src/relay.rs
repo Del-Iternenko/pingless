@@ -98,17 +98,26 @@ pub async fn deploy(
     port: u16,
     psk: &str,
 ) -> Result<Deployed> {
-    anyhow::ensure!(port >= 1024, "порт должен быть от 1024");
+    anyhow::ensure!(
+        port >= 1024,
+        tr!(
+            "порт должен быть от 1024",
+            "the port must be 1024 or higher"
+        )
+    );
     anyhow::ensure!(
         !psk.is_empty()
             && psk
                 .chars()
                 .all(|c| c.is_ascii_graphic() && !"'\"\\%$`".contains(c)),
-        "ключ psk в настройках relay содержит кавычки или спецсимволы: поменяйте его на буквы и цифры"
+        tr!(
+            "ключ psk в настройках relay содержит кавычки или спецсимволы: поменяйте его на буквы и цифры",
+            "the relay psk contains quotes or special characters: change it to letters and digits"
+        )
     );
     let session = connect(app, id, host, password, known_hosts).await?;
 
-    say(app, id, "Проверяю сервер");
+    say(app, id, &tr!("Проверяю сервер", "Checking the server"));
     let (_, info) = exec(
         app,
         id,
@@ -124,40 +133,53 @@ pub async fn deploy(
     let systemd = lines.next().is_some_and(|l| !l.trim().is_empty());
     emit_data(app, id, format!("  {uname}, uid {uid}\r\n").as_bytes());
     if !uname.starts_with("Linux") {
-        bail!("нужен Linux-сервер, а это: {uname}");
+        bail!(tr!(
+            "нужен Linux-сервер, а это: {uname}",
+            "a Linux server is needed, this is: {uname}"
+        ));
     }
     if !systemd {
-        bail!(
-            "на сервере нет systemd: поставьте relay вручную (openlag-relay exit --listen 0.0.0.0:{port})"
-        );
+        bail!(tr!(
+            "на сервере нет systemd: поставьте relay вручную (openlag-relay exit --listen 0.0.0.0:{port})",
+            "the server has no systemd: run the relay by hand (openlag-relay exit --listen 0.0.0.0:{port})"
+        ));
     }
     let arch = match uname.split_whitespace().nth(1).unwrap_or("") {
         "x86_64" | "amd64" => "x86_64",
         "aarch64" | "arm64" => "aarch64",
-        other => bail!("архитектура {other} пока не поддерживается (есть x86_64 и aarch64)"),
+        other => bail!(tr!(
+            "архитектура {other} пока не поддерживается (есть x86_64 и aarch64)",
+            "{other} is not supported yet (x86_64 and aarch64 are)"
+        )),
     };
     let sudo = if uid == "0" {
         ""
     } else {
         let (code, _) = exec(app, id, &session, "sudo -n true", None, false).await?;
         if code != 0 {
-            bail!(
+            bail!(tr!(
                 "нужен вход под root или sudo без пароля для пользователя {}",
+                "log in as root or give {} passwordless sudo",
                 host.user
-            );
+            ));
         }
         "sudo -n "
     };
 
-    let bin = binary(bin_dirs, arch)
-        .with_context(|| format!("нет сборки relay для {arch} рядом с OpenLag"))?;
-    let data =
-        std::fs::read(&bin).with_context(|| format!("не удалось прочитать {}", bin.display()))?;
+    let bin = binary(bin_dirs, arch).with_context(|| {
+        tr!(
+            "нет сборки relay для {arch} рядом с OpenLag",
+            "no relay build for {arch} next to OpenLag"
+        )
+    })?;
+    let data = std::fs::read(&bin)
+        .with_context(|| tr!("не удалось прочитать {}", "cannot read {}", bin.display()))?;
     say(
         app,
         id,
-        &format!(
+        &tr!(
             "Загружаю relay ({arch}, {:.1} МБ)",
+            "Uploading the relay ({arch}, {:.1} MB)",
             data.len() as f64 / 1_048_576.0
         ),
     );
@@ -171,7 +193,10 @@ pub async fn deploy(
     )
     .await?;
     if code != 0 {
-        bail!("не удалось загрузить файл (код {code})");
+        bail!(tr!(
+            "не удалось загрузить файл (код {code})",
+            "upload failed (code {code})"
+        ));
     }
     let (_, ver) = exec(
         app,
@@ -183,13 +208,21 @@ pub async fn deploy(
     )
     .await?;
     if !ver.contains("openlag-relay") {
-        bail!(
+        bail!(tr!(
             "загруженный relay не запускается на сервере: {}",
+            "the uploaded relay does not run on the server: {}",
             ver.trim()
-        );
+        ));
     }
 
-    say(app, id, "Ставлю службу openlag-relay");
+    say(
+        app,
+        id,
+        &tr!(
+            "Ставлю службу openlag-relay",
+            "Installing the openlag-relay service"
+        ),
+    );
     let script = install_script(port, psk);
     let (code, out) = exec(
         app,
@@ -201,16 +234,24 @@ pub async fn deploy(
     )
     .await?;
     if code != 0 || !out.contains("active") {
-        bail!(
-            "служба не запустилась (код {code}); смотрите вывод выше или `journalctl -u openlag-relay`"
-        );
+        bail!(tr!(
+            "служба не запустилась (код {code}); смотрите вывод выше или `journalctl -u openlag-relay`",
+            "the service did not start (code {code}); see the output above or `journalctl -u openlag-relay`"
+        ));
     }
 
     let ip = resolve_v4(&host.host).await?;
     let _ = session
         .disconnect(russh::Disconnect::ByApplication, "", "")
         .await;
-    say(app, id, &format!("Готово: relay слушает {ip}:{port}/udp"));
+    say(
+        app,
+        id,
+        &tr!(
+            "Готово: relay слушает {ip}:{port}/udp",
+            "Done: the relay listens on {ip}:{port}/udp"
+        ),
+    );
     Ok(Deployed {
         via: SocketAddr::new(ip.into(), port),
     })
@@ -226,7 +267,14 @@ pub async fn remove(
     let session = connect(app, id, host, password, known_hosts).await?;
     let (_, uid) = exec(app, id, &session, "id -u", None, false).await?;
     let sudo = if uid.trim() == "0" { "" } else { "sudo -n " };
-    say(app, id, "Удаляю службу openlag-relay");
+    say(
+        app,
+        id,
+        &tr!(
+            "Удаляю службу openlag-relay",
+            "Removing the openlag-relay service"
+        ),
+    );
     let script = "systemctl disable --now openlag-relay 2>/dev/null; \
         rm -f /etc/systemd/system/openlag-relay.service /usr/local/bin/openlag-relay; \
         rm -rf /etc/openlag; systemctl daemon-reload; echo removed\n";
@@ -243,9 +291,19 @@ pub async fn remove(
         .disconnect(russh::Disconnect::ByApplication, "", "")
         .await;
     if code != 0 || !out.contains("removed") {
-        bail!("не удалось удалить (код {code})");
+        bail!(tr!(
+            "не удалось удалить (код {code})",
+            "removal failed (code {code})"
+        ));
     }
-    say(app, id, "Relay удалён с сервера");
+    say(
+        app,
+        id,
+        &tr!(
+            "Relay удалён с сервера",
+            "The relay is removed from the server"
+        ),
+    );
     resolve_v4(&host.host).await
 }
 
@@ -280,10 +338,10 @@ systemctl daemon-reload
 systemctl enable openlag-relay >/dev/null 2>&1
 systemctl restart openlag-relay
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q 'Status: active'; then
-  ufw allow {port}/udp >/dev/null && echo "ufw: открыт {port}/udp"
+  ufw allow {port}/udp >/dev/null && echo "ufw: {port}/udp open"
 fi
 if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-  firewall-cmd --permanent --add-port={port}/udp >/dev/null && firewall-cmd --reload >/dev/null && echo "firewalld: открыт {port}/udp"
+  firewall-cmd --permanent --add-port={port}/udp >/dev/null && firewall-cmd --reload >/dev/null && echo "firewalld: {port}/udp open"
 fi
 sleep 1
 systemctl is-active openlag-relay
@@ -297,12 +355,12 @@ async fn resolve_v4(host: &str) -> Result<std::net::Ipv4Addr> {
     }
     tokio::net::lookup_host((host, 0))
         .await
-        .with_context(|| format!("не удалось узнать IP {host}"))?
+        .with_context(|| tr!("не удалось узнать IP {host}", "cannot resolve {host}"))?
         .find_map(|a| match a.ip() {
             std::net::IpAddr::V4(v4) => Some(v4),
             _ => None,
         })
-        .with_context(|| format!("у {host} нет IPv4-адреса"))
+        .with_context(|| tr!("у {host} нет IPv4-адреса", "{host} has no IPv4 address"))
 }
 
 /// Adds (or replaces, by name) an exit in the relays TOML, keeping the PSK.

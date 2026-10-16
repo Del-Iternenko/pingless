@@ -156,7 +156,7 @@ const Fun = (() => {
       ctx.fillStyle = "#e6eaf2";
       ctx.font = "600 24px Inter, Segoe UI, sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText(over ? `Конец игры: ${score}` : "Пауза", c.width / 2, c.height / 2);
+      ctx.fillText(I18N.t(over ? `Конец игры: ${score}` : "Пауза"), c.width / 2, c.height / 2);
     }
   }
 

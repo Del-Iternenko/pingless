@@ -155,7 +155,7 @@ impl Terminals {
                 }
             }
             me.sessions.lock().remove(&id);
-            emit_exit(&app, id, "процесс завершён");
+            emit_exit(&app, id, tr!("процесс завершён", "process exited"));
         });
         Ok(id)
     }
@@ -177,7 +177,7 @@ impl Terminals {
         tauri::async_runtime::spawn(async move {
             let reason =
                 match ssh_session(&app, id, &host, &password, &known_hosts, cols, rows, rx).await {
-                    Ok(()) => "соединение закрыто".to_string(),
+                    Ok(()) => tr!("соединение закрыто", "connection closed"),
                     Err(e) => {
                         emit_data(&app, id, format!("\r\n\x1b[31m{e:#}\x1b[0m\r\n").as_bytes());
                         format!("{e:#}")
@@ -288,16 +288,18 @@ impl russh::client::Handler for Client {
         let mut known = load_known(&self.known_hosts);
         match known.get(&self.host_id) {
             Some(saved) if *saved == fp => Ok(true),
-            Some(saved) => bail!(
+            Some(saved) => bail!(tr!(
                 "ключ сервера {} изменился!\r\n  был:   {saved}\r\n  стал:  {fp}\r\nВозможен перехват соединения. Если вы переустановили сервер, удалите его ключ в списке серверов и подключитесь снова.",
+                "the server key of {} changed!\r\n  was: {saved}\r\n  now: {fp}\r\nThe connection may be intercepted. If you reinstalled the server, forget its key in the server list and connect again.",
                 self.host_id
-            ),
+            )),
             None => {
                 emit_data(
                     &self.app,
                     self.term,
-                    format!(
+                    tr!(
                         "\x1b[33mНовый сервер {}. Ключ запомнен: {fp}\x1b[0m\r\n",
+                        "\x1b[33mNew server {}. Key saved: {fp}\x1b[0m\r\n",
                         self.host_id
                     )
                     .as_bytes(),
@@ -324,9 +326,12 @@ pub(crate) async fn connect(
     emit_data(
         app,
         id,
-        format!(
+        tr!(
             "Подключение к {}@{}:{}…\r\n",
-            host.user, host.host, host.port
+            "Connecting to {}@{}:{}…\r\n",
+            host.user,
+            host.host,
+            host.port
         )
         .as_bytes(),
     );
@@ -346,14 +351,23 @@ pub(crate) async fn connect(
         russh::client::connect(config, (host.host.as_str(), host.port), handler),
     )
     .await
-    .context("сервер не отвечает (15 с)")??;
+    .context(tr!(
+        "сервер не отвечает (15 с)",
+        "the server does not answer (15 s)"
+    ))??;
 
     let ok = if host.auth == "key" {
         let key = russh::keys::load_secret_key(
             &host.key_path,
             (!password.is_empty()).then_some(password),
         )
-        .with_context(|| format!("не удалось прочитать ключ {}", host.key_path))?;
+        .with_context(|| {
+            tr!(
+                "не удалось прочитать ключ {}",
+                "cannot read key {}",
+                host.key_path
+            )
+        })?;
         let hash = session.best_supported_rsa_hash().await?.flatten();
         session
             .authenticate_publickey(
@@ -369,7 +383,10 @@ pub(crate) async fn connect(
             .success()
     };
     if !ok {
-        bail!("сервер отклонил вход: проверьте пользователя и пароль или ключ");
+        bail!(tr!(
+            "сервер отклонил вход: проверьте пользователя и пароль или ключ",
+            "login rejected: check the user and password or key"
+        ));
     }
     Ok(session)
 }
@@ -407,7 +424,7 @@ async fn ssh_session(
                 Some(ChannelMsg::Data { data }) => emit_data(app, id, &data),
                 Some(ChannelMsg::ExtendedData { data, .. }) => emit_data(app, id, &data),
                 Some(ChannelMsg::ExitStatus { exit_status }) => {
-                    emit_data(app, id, format!("\r\n[код выхода {exit_status}]\r\n").as_bytes());
+                    emit_data(app, id, tr!("\r\n[код выхода {exit_status}]\r\n", "\r\n[exit code {exit_status}]\r\n").as_bytes());
                 }
                 Some(ChannelMsg::Eof | ChannelMsg::Close) | None => break,
                 _ => {}
