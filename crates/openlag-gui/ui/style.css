@@ -295,3 +295,5 @@ img, svg, canvas { -webkit-user-drag: none; }
 .seg.small button { padding: 4px 10px; font-size: 12.5px; }
 .srv-group { display: flex; align-items: center; gap: 8px; padding: 10px 4px 2px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .srv-group .flag { margin-right: 0; }
+
+.kpi-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }

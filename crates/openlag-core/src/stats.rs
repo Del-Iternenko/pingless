@@ -145,6 +145,10 @@ pub struct FlowSnapshot {
     /// Copies of downstream packets dropped because another route delivered first.
     pub duplicates: u64,
     pub idle_ms: u64,
+    /// Round trip through the tunnel measured on the game's own request/response
+    /// packets; None for streaming flows.
+    pub rtt_ms: Option<f64>,
+    pub rtt_jitter_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -155,4 +159,128 @@ pub struct Snapshot {
     pub preferred_exit: Option<String>,
     /// TCP connections redirected through proxies (largest first, up to 200).
     pub tcp: Vec<crate::tcp::TcpSnapshot>,
+}
+
+/// Passive round-trip time of a flow, from the game's own packets.
+///
+/// Games ping their servers and relays with small request/response packets (Valve's
+/// SDR relay pings, matchmaking pings). For such flows the time from a request to the
+/// next answer is the real RTT through the tunnel. Streaming flows (match traffic at
+/// tick rate, both sides sending on their own) give meaningless pairs, so the RTT is
+/// only reported while the flow looks request/response: few packets and about one
+/// answer per request.
+#[derive(Debug)]
+pub(crate) struct FlowRtt {
+    sent: VecDeque<Instant>,
+    window_start: Instant,
+    window_up: u32,
+    window_down: u32,
+    pingish: bool,
+    srtt: Option<f64>,
+    jitter: f64,
+    samples: u32,
+}
+
+const RTT_WINDOW: Duration = Duration::from_secs(5);
+const RTT_MAX_AGE: Duration = Duration::from_secs(2);
+
+impl FlowRtt {
+    pub(crate) fn new(now: Instant) -> FlowRtt {
+        FlowRtt {
+            sent: VecDeque::new(),
+            window_start: now,
+            window_up: 0,
+            window_down: 0,
+            pingish: false,
+            srtt: None,
+            jitter: 0.0,
+            samples: 0,
+        }
+    }
+
+    fn roll(&mut self, now: Instant) {
+        if now - self.window_start < RTT_WINDOW {
+            return;
+        }
+        let (up, down) = (self.window_up as f64, self.window_down as f64);
+        // At most ~10 requests per second, and roughly one answer each.
+        let pingish = (1.0..=50.0).contains(&up) && (0.6..=1.6).contains(&(down / up));
+        if !pingish {
+            self.srtt = None;
+            self.samples = 0;
+        }
+        self.pingish = pingish;
+        self.window_start = now;
+        self.window_up = 0;
+        self.window_down = 0;
+    }
+
+    pub(crate) fn on_up(&mut self, now: Instant) {
+        self.roll(now);
+        self.window_up += 1;
+        while self.sent.front().is_some_and(|t| now - *t > RTT_MAX_AGE) {
+            self.sent.pop_front();
+        }
+        if self.sent.len() >= 32 {
+            self.sent.pop_front();
+        }
+        self.sent.push_back(now);
+    }
+
+    pub(crate) fn on_down(&mut self, now: Instant) {
+        self.roll(now);
+        self.window_down += 1;
+        while self.sent.front().is_some_and(|t| now - *t > RTT_MAX_AGE) {
+            self.sent.pop_front();
+        }
+        let Some(sent) = self.sent.pop_front() else {
+            return;
+        };
+        let rtt = (now - sent).as_secs_f64() * 1000.0;
+        match self.srtt {
+            None => self.srtt = Some(rtt),
+            Some(s) => {
+                self.jitter = 0.75 * self.jitter + 0.25 * (s - rtt).abs();
+                self.srtt = Some(0.8 * s + 0.2 * rtt);
+            }
+        }
+        self.samples += 1;
+    }
+
+    /// (rtt, jitter) in ms while the flow looks request/response.
+    pub(crate) fn get(&self) -> Option<(f64, f64)> {
+        if self.pingish && self.samples >= 2 {
+            self.srtt.map(|s| (s, self.jitter))
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod rtt_tests {
+    use super::*;
+
+    #[test]
+    fn ping_flow_reports_rtt_streaming_does_not() {
+        let t0 = Instant::now();
+        let mut ping = FlowRtt::new(t0);
+        // One request per 500 ms, answer after 40 ms, for 12 s.
+        for i in 0..24 {
+            let t = t0 + Duration::from_millis(500 * i);
+            ping.on_up(t);
+            ping.on_down(t + Duration::from_millis(40));
+        }
+        let (rtt, _) = ping.get().expect("ping flow must report");
+        assert!((rtt - 40.0).abs() < 1.0, "{rtt}");
+
+        let mut stream = FlowRtt::new(t0);
+        // 64 packets per second each way, independent.
+        for i in 0..64 * 12 {
+            let t = t0 + Duration::from_micros(15_625 * i);
+            stream.on_up(t);
+            stream.on_down(t + Duration::from_millis(3));
+        }
+        assert!(stream.get().is_none(), "streaming flow must not report");
+    }
 }

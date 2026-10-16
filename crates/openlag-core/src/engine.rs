@@ -17,7 +17,7 @@ use tracing::{debug, info, warn};
 
 use crate::config::{EngineConfig, ProxySpec, RouteSpec};
 use crate::socks::{self, Association};
-use crate::stats::{FlowSnapshot, PathSnapshot, PathStats, Snapshot};
+use crate::stats::{FlowRtt, FlowSnapshot, PathSnapshot, PathStats, Snapshot};
 use crate::tcp;
 
 /// A captured UDP flow, as the game sees it.
@@ -98,6 +98,7 @@ struct Flow {
     packets_up: u64,
     packets_down: u64,
     duplicates: u64,
+    rtt: FlowRtt,
 }
 
 #[derive(Default)]
@@ -370,14 +371,19 @@ impl Inner {
                         packets_up: 0,
                         packets_down: 0,
                         duplicates: 0,
+                        rtt: FlowRtt::new(Instant::now()),
                     },
                 );
                 id
             }
         };
         let flow = flows.by_id.get_mut(&id).expect("flow index out of sync");
-        flow.last_active = Instant::now();
+        let now = Instant::now();
+        flow.last_active = now;
         flow.packets_up += 1;
+        if flow.exit.is_some() {
+            flow.rtt.on_up(now);
+        }
         let exit_idx = match flow.exit {
             None => return Upstream::Direct,
             Some(ExitRef::Proxy(_)) => {
@@ -516,6 +522,7 @@ impl Inner {
                         }
                         flow.packets_down += 1;
                         flow.last_active = now;
+                        flow.rtt.on_down(now);
                         flow.key
                     };
                     (self.downstream)(Downstream {
@@ -579,8 +586,10 @@ impl Inner {
                         {
                             let mut flows = self.flows.lock();
                             let Some(flow) = flows.by_id.get_mut(&flow_id) else { return };
+                            let now = Instant::now();
                             flow.packets_down += 1;
-                            flow.last_active = Instant::now();
+                            flow.last_active = now;
+                            flow.rtt.on_down(now);
                         }
                         (self.downstream)(Downstream { key, from, payload });
                     }
@@ -825,6 +834,8 @@ impl Inner {
                 packets_down: f.packets_down,
                 duplicates: f.duplicates,
                 idle_ms: (now - f.last_active).as_millis() as u64,
+                rtt_ms: f.rtt.get().map(|r| r.0),
+                rtt_jitter_ms: f.rtt.get().map(|r| r.1),
             })
             .collect();
         Snapshot {

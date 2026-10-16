@@ -78,7 +78,7 @@
       <div class="kpis">
         <div class="card kpi"><div class="label">Джиттер</div><div class="kpi-val" id="kpi-jitter">—</div></div>
         <div class="card kpi"><div class="label">Потери</div><div class="kpi-val" id="kpi-loss">—</div></div>
-        <div class="card kpi"><div class="label">Пакетов через туннель</div><div class="kpi-val" id="kpi-tunneled">0</div></div>
+        <div class="card kpi" title="Пинг до тех же серверов игры: напрямую с вашей сетевой карты и через OpenLag (по ответам самой игры)"><div class="label">Без OpenLag → с OpenLag</div><div class="kpi-val" id="kpi-compare">—</div><div class="kpi-sub" id="kpi-compare-sub">появится, когда игра начнёт пинговать свои серверы</div></div>
         <div class="card kpi"><div class="label">Соединений</div><div class="kpi-val" id="kpi-flows">0</div></div>
       </div>
 
@@ -97,8 +97,8 @@
       <div class="card">
         <div class="card-head"><h3>Соединения</h3><span class="muted" id="flows-count"></span></div>
         <table class="table">
-          <thead><tr><th>Тип</th><th>Куда</th><th>Через</th><th class="num">Отправлено</th><th class="num">Получено</th></tr></thead>
-          <tbody id="flows"><tr><td colspan="5" class="empty">Пока нет. Включите оптимизацию и запустите программу.</td></tr></tbody>
+          <thead><tr><th>Тип</th><th>Куда</th><th>Через</th><th class="num" title="ICMP напрямую с сетевой карты, в обход любых туннелей">Без OpenLag</th><th class="num" title="Время ответа сервера на пакеты самой игры через туннель">С OpenLag</th><th class="num">Трафик</th></tr></thead>
+          <tbody id="flows"><tr><td colspan="6" class="empty">Пока нет. Включите оптимизацию и запустите программу.</td></tr></tbody>
         </table>
       </div>
     </section>

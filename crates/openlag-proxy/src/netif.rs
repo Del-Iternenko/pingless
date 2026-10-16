@@ -36,6 +36,8 @@ pub struct NetInterface {
     pub name: String,
     pub description: String,
     pub metric: u32,
+    /// First IPv4 address of the adapter, used as a source address to bypass TUNs.
+    pub ipv4: Option<std::net::Ipv4Addr>,
 }
 
 /// The up, physical Ethernet or Wi-Fi adapter with a default gateway and the lowest
@@ -102,10 +104,29 @@ pub fn physical_interface() -> Option<NetInterface> {
         if VIRTUAL.iter().any(|v| text.contains(v)) {
             continue;
         }
+        let mut ipv4 = None;
+        let mut ua = a.FirstUnicastAddress;
+        while !ua.is_null() {
+            // SAFETY: linked list owned by the adapter list; sockaddr checked for AF_INET.
+            let u = unsafe { &*ua };
+            let sa = u.Address.lpSockaddr;
+            if !sa.is_null() && unsafe { (*sa).sa_family } == AF_INET {
+                let sin = unsafe {
+                    &*(sa as *const windows_sys::Win32::Networking::WinSock::SOCKADDR_IN)
+                };
+                // S_addr is in network byte order.
+                ipv4 = Some(std::net::Ipv4Addr::from(u32::from_be(unsafe {
+                    sin.sin_addr.S_un.S_addr
+                })));
+                break;
+            }
+            ua = u.Next;
+        }
         let iface = NetInterface {
             name,
             description,
             metric: a.Ipv4Metric,
+            ipv4,
         };
         if best.as_ref().is_none_or(|b| iface.metric < b.metric) {
             best = Some(iface);

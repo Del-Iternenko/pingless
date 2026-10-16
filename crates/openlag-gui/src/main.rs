@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod compare;
 mod geo;
 mod settings;
 mod sys;
@@ -32,6 +33,8 @@ struct AppState {
     geo: parking_lot::Mutex<geo::GeoCache>,
     geo_path: PathBuf,
     app: std::sync::OnceLock<tauri::AppHandle>,
+    /// Direct (no tunnel) ping to the game servers currently tunnelled.
+    compare: parking_lot::Mutex<compare::Comparator>,
 }
 
 #[derive(Default)]
@@ -106,6 +109,8 @@ struct Tick {
     snapshot: Option<Snapshot>,
     capture: Option<CaptureView>,
     capturing: bool,
+    /// Game server IP -> direct ping without OpenLag.
+    direct: HashMap<String, compare::Direct>,
 }
 
 impl AppState {
@@ -864,6 +869,7 @@ fn main() {
                 geo: parking_lot::Mutex::new(geo::GeoCache::load(&data_dir.join("geo.json"))),
                 geo_path: data_dir.join("geo.json"),
                 app: std::sync::OnceLock::new(),
+                compare: parking_lot::Mutex::default(),
             });
             let _ = state.app.set(app.handle().clone());
             let _ = state.save(); // persist the generated device id
@@ -883,6 +889,7 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 state.rebuild().await;
                 tauri::async_runtime::spawn(auto_refresh(state.clone()));
+                tauri::async_runtime::spawn(compare_loop(state.clone()));
                 tauri::async_runtime::spawn(auto_connect(state.clone(), handle.clone()));
                 tauri::async_runtime::spawn(auto_update_check(state.clone(), handle.clone()));
                 loop {
@@ -911,6 +918,7 @@ fn main() {
                             }
                         }),
                         capturing: net.capture.is_some(),
+                        direct: state.compare.lock().view(),
                     };
                     drop(net);
                     if let Some(snap) = &tick.snapshot {
@@ -1210,4 +1218,45 @@ async fn refresh_geo(st: Shared<'_>) -> CmdResult<()> {
 #[tauri::command]
 fn start_page() -> Option<String> {
     std::env::var("OPENLAG_START_PAGE").ok()
+}
+
+/// Every 2 s, pings directly (no tunnel) the public IPv4 game servers that tunnelled
+/// flows talk to, most recently active first.
+async fn compare_loop(st: Arc<AppState>) {
+    let mut source: Option<std::net::Ipv4Addr> = None;
+    let mut source_checked = std::time::Instant::now() - Duration::from_secs(3600);
+    loop {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let mut flows = match st.net.try_lock() {
+            Ok(net) => net
+                .engine
+                .as_ref()
+                .map(|e| e.snapshot().flows)
+                .unwrap_or_default(),
+            Err(_) => continue,
+        };
+        flows.retain(|f| f.exit.is_some() && f.idle_ms < 30_000);
+        flows.sort_by_key(|f| f.idle_ms);
+        let mut ips = Vec::new();
+        for f in &flows {
+            if let std::net::IpAddr::V4(ip) = f.remote.ip()
+                && !openlag_capture::is_local_scope(ip.into())
+                && !ips.contains(&ip)
+            {
+                ips.push(ip);
+            }
+        }
+        if ips.is_empty() {
+            continue;
+        }
+        if source_checked.elapsed() > Duration::from_secs(30) {
+            source_checked = std::time::Instant::now();
+            source = openlag_proxy::physical_interface().and_then(|i| i.ipv4);
+        }
+        // Ping without holding the lock: the UI tick reads it every second.
+        let results = tauri::async_runtime::spawn_blocking(move || compare::ping_all(&ips, source))
+            .await
+            .unwrap_or_default();
+        st.compare.lock().record(results);
+    }
 }

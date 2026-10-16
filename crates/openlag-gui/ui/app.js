@@ -209,7 +209,7 @@ function renderHome() {
   $("kpi-jitter").textContent = ex?.alive ? `${ex.jitter_ms.toFixed(1)} мс` : "—";
   $("kpi-loss").textContent = ex ? `${ex.loss_pct.toFixed(1)} %` : "—";
   $("kpi-loss").className = `kpi-val ${ex ? (ex.loss_pct < 1 ? "good" : ex.loss_pct < 5 ? "mid" : "bad") : ""}`;
-  $("kpi-tunneled").textContent = (tick?.capture?.tunneled ?? 0).toLocaleString("ru-RU");
+  renderCompare();
   const flows = tick?.snapshot?.flows ?? [];
   const tcp = (tick?.snapshot?.tcp ?? []).filter((t) => t.open);
   $("kpi-flows").textContent = flows.length + tcp.length;
@@ -226,12 +226,38 @@ function renderHome() {
   chartSeries = { key, series };
 
   const rows = [
-    ...flows.sort((a, b) => a.id - b.id).map((f) => `<tr><td><span class="proto udp">UDP</span></td><td class="mono">${esc(f.remote)}</td><td>${esc(f.exit ? displayName(f.exit) : "напрямую")}</td><td class="num">${f.packets_up} пак.</td><td class="num">${f.packets_down} пак.${f.duplicates ? ` <span class="muted">(+${f.duplicates} дубл.)</span>` : ""}</td></tr>`),
-    ...tcp.slice(0, 30).map((t) => `<tr><td><span class="proto tcp">TCP</span></td><td class="mono">${esc(t.remote)}</td><td>${esc(displayName(t.exit))}</td><td class="num">${fmtBytes(t.bytes_up)}</td><td class="num">${fmtBytes(t.bytes_down)}</td></tr>`),
+    ...flows.sort((a, b) => a.id - b.id).map((f) => {
+      const d = (tick?.direct ?? {})[f.remote.split(":")[0]];
+      const dTxt = d?.ms != null ? `${fmtMs(d.ms)} мс <span class="muted">±${d.jitter_ms.toFixed(0)}</span>` : d ? `<span class="muted">нет ответа</span>` : "—";
+      const tTxt = f.rtt_ms != null ? `<span class="${f.rtt_ms <= (d?.ms ?? Infinity) ? "good" : ""}">${fmtMs(f.rtt_ms)} мс</span> <span class="muted">±${(f.rtt_jitter_ms ?? 0).toFixed(0)}</span>` : `<span class="muted" title="Поток матча: игра шлёт пакеты потоком, пинг видно в самой игре">поток</span>`;
+      return `<tr><td><span class="proto udp">UDP</span></td><td class="mono">${esc(f.remote)}</td><td>${esc(f.exit ? displayName(f.exit) : "напрямую")}</td><td class="num">${dTxt}</td><td class="num">${tTxt}</td><td class="num">${f.packets_up}↑ ${f.packets_down}↓${f.duplicates ? ` <span class="muted">(+${f.duplicates})</span>` : ""}</td></tr>`;
+    }),
+    ...tcp.slice(0, 30).map((t) => `<tr><td><span class="proto tcp">TCP</span></td><td class="mono">${esc(t.remote)}</td><td>${esc(displayName(t.exit))}</td><td class="num">—</td><td class="num">—</td><td class="num">${fmtBytes(t.bytes_up)}↑ ${fmtBytes(t.bytes_down)}↓</td></tr>`),
   ];
   $("flows-count").textContent = tcp.length > 30 ? `показано 30 из ${tcp.length} TCP` : "";
   const html = rows.length ? rows.join("") : `<tr><td colspan="5" class="empty">Пока нет. Включите оптимизацию и запустите программу.</td></tr>`;
   if ($("flows").innerHTML !== html) $("flows").innerHTML = html;
+}
+
+// Average over game servers measured both ways: direct ICMP vs the game's own
+// request/response timing through the tunnel.
+function renderCompare() {
+  const direct = tick?.direct ?? {};
+  const pairs = (tick?.snapshot?.flows ?? [])
+    .map((f) => [f, direct[f.remote.split(":")[0]]])
+    .filter(([f, d]) => f.rtt_ms != null && d?.ms != null);
+  if (!pairs.length) {
+    setText($("kpi-compare"), "—");
+    $("kpi-compare").className = "kpi-val";
+    setText($("kpi-compare-sub"), Object.keys(direct).length ? "ждём, пока игра пропингует свои серверы" : "появится, когда игра начнёт пинговать свои серверы");
+    return;
+  }
+  const avg = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  const dMs = avg(pairs.map(([, d]) => d.ms)), tMs = avg(pairs.map(([f]) => f.rtt_ms));
+  const dJ = avg(pairs.map(([, d]) => d.jitter_ms)), tJ = avg(pairs.map(([f]) => f.rtt_jitter_ms ?? 0));
+  setText($("kpi-compare"), `${fmtMs(dMs)} → ${fmtMs(tMs)} мс`);
+  $("kpi-compare").className = `kpi-val ${tMs < dMs - 1 ? "good" : tMs > dMs + 5 ? "bad" : ""}`;
+  setText($("kpi-compare-sub"), `джиттер ${dJ.toFixed(0)} → ${tJ.toFixed(0)} мс · серверов: ${pairs.length}`);
 }
 
 $("power").addEventListener("click", async () => {
