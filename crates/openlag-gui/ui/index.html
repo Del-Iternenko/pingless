@@ -114,6 +114,17 @@
       </div>
       <p class="hint">Пинг меряется по UDP через сам сервер, так же как пойдут пакеты игры. Новые соединения идут через выбранный сервер, а в режиме «Авто» через сервер с лучшим пингом. Отключённые переключателем серверы не запускаются и никогда не выбираются.</p>
       <div class="card">
+        <div class="card-head">
+          <h3>Страны выхода <span class="muted" id="geo-note"></span></h3>
+          <div class="row">
+            <div class="seg small" id="sort-seg"><button data-sort="ping">По пингу</button><button data-sort="country">По странам</button></div>
+            <button class="btn icon" id="geo-refresh" aria-label="Перепроверить страны" title="Перепроверить страны"><svg class="ic"><use href="#i-refresh"/></svg></button>
+          </div>
+        </div>
+        <p class="hint" style="margin-bottom:10px">Страна определяется не по названию, а по факту: через каждый сервер запрашивается Cloudflare, и он сообщает, с какого IP и из какой страны реально выходит трафик. Щелчок по стране отключает или включает все её серверы.</p>
+        <div class="countries" id="countries"></div>
+      </div>
+      <div class="card">
         <div class="card-head"><h3>Фильтры: отключить серверы по слову</h3><span class="muted" id="filter-count"></span></div>
         <div class="chips" id="filter-chips"></div>
         <div class="row">

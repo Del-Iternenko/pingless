@@ -275,3 +275,23 @@ body.compact .kpi-big { font-size: 44px; }
 main { min-height: 0; }
 img, svg, canvas { -webkit-user-drag: none; }
 * { -webkit-tap-highlight-color: transparent; }
+
+/* Countries */
+.flag { width: 20px; height: 15px; border-radius: 3px; object-fit: cover; flex: none; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12); vertical-align: -2px; margin-right: 8px; }
+.flag.none { display: inline-grid; place-items: center; font-size: 9px; font-weight: 700; color: var(--muted); background: var(--surface-3); }
+.srv .name { display: flex; align-items: center; }
+.srv .name .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.countries { display: flex; flex-wrap: wrap; gap: 8px; }
+.cchip { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--surface-2); transition: background 150ms, opacity 150ms, border-color 150ms; }
+.cchip .flag { margin-right: 0; }
+.cchip b { font-weight: 600; }
+.cchip span { color: var(--muted); font-size: 12px; }
+.cchip i { font-style: normal; font-size: 12px; font-variant-numeric: tabular-nums; }
+.cchip:hover { border-color: var(--accent); }
+.cchip.off { opacity: 0.45; background: transparent; }
+.cchip.off b { text-decoration: line-through; }
+.cchip.auto .ic { width: 16px; height: 16px; color: var(--accent); }
+.seg.small { margin-bottom: 0; }
+.seg.small button { padding: 4px 10px; font-size: 12.5px; }
+.srv-group { display: flex; align-items: center; gap: 8px; padding: 10px 4px 2px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.srv-group .flag { margin-right: 0; }

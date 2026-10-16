@@ -14,8 +14,29 @@ let tick = null;       // latest Tick
 let busy = false;
 let processes = [];
 const history = new Map(); // exit key -> [{ rtt, loss }]
+const warmup = new Map(); // exit key -> ticks seen alive
 
 const $ = (id) => document.getElementById(id);
+const regionNames = new Intl.DisplayNames(["ru"], { type: "region" });
+function countryName(cc) {
+  try { return regionNames.of(cc) ?? cc; } catch { return cc; }
+}
+function flagHtml(cc) {
+  return cc && /^[A-Z]{2}$/.test(cc)
+    ? `<img class="flag" src="flags/${cc.toLowerCase()}.svg" alt="${cc}">`
+    : `<span class="flag none">?</span>`;
+}
+// A country without a flag file falls back to its code (inline onerror is blocked by CSP).
+document.addEventListener("error", (e) => {
+  const img = e.target;
+  if (img instanceof HTMLImageElement && img.classList.contains("flag")) {
+    const span = document.createElement("span");
+    span.className = "flag none";
+    span.textContent = img.alt;
+    img.replaceWith(span);
+  }
+}, true);
+let serverSort = (() => { try { return localStorage.getItem("server-sort") || "ping"; } catch { return "ping"; } })();
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const icon = (name) => `<svg class="ic"><use href="#i-${name}"/></svg>`;
 
@@ -237,7 +258,7 @@ function serverRow(key) {
   el.dataset.key = key;
   el.innerHTML = `
     <div class="dot"></div>
-    <div style="min-width:0"><div class="name"><span class="n"></span><span class="badge"></span></div><div class="sub"></div></div>
+    <div style="min-width:0"><div class="name"><span class="fl"></span><span class="n"></span><span class="badge"></span></div><div class="sub"></div></div>
     <div class="metric m-ping"><span></span><small>пинг</small></div>
     <div class="metric m-jit"><span></span><small>джиттер</small></div>
     <div class="metric m-loss"><span></span><small>потери</small></div>
@@ -270,9 +291,15 @@ function updateRow(el, r, p, pref) {
   el.className = `srv${selected ? " selected" : ""}${r.off ? " off" : ""}`;
   el.querySelector(".dot").className = `dot ${r.off ? "" : error ? "dead" : p?.alive ? "alive" : ""}`;
   setText(el.querySelector(".n"), r.name);
+  const fl = el.querySelector(".fl");
+  if (fl.dataset.cc !== (r.country ?? "")) {
+    fl.dataset.cc = r.country ?? "";
+    fl.innerHTML = flagHtml(r.country);
+  }
   setText(el.querySelector(".badge"), r.proto);
   const sub = el.querySelector(".sub");
-  setText(sub, r.off ? `Отключён · ${r.off}` : error ? error : r.sub);
+  const where = r.country ? `${countryName(r.country)} · выход ${r.exit_ip}${r.colo ? " (" + r.colo + ")" : ""} · ` : "";
+  setText(sub, r.off ? `Отключён · ${r.off}` : error ? error : where + r.sub);
   sub.className = `sub${error ? " err-text" : ""}`;
   const mp = el.querySelector(".m-ping");
   mp.className = `metric m-ping ${pingClass(ping)}`;
@@ -303,27 +330,114 @@ function renderServers() {
   $("auto-btn").classList.toggle("on", !pref);
   renderFilters();
   const rows = [
-    ...state.servers.map((s) => ({ key: s.key, name: s.name, sub: `${s.subscription} · ${s.address}:${s.port}`, proto: s.protocol, off: s.disabled })),
-    ...state.relay_names.map((n) => ({ key: n, name: n, sub: "свой relay", proto: "openlag", off: null })),
-  ].filter((r) => !filter || (r.name + r.sub).toLowerCase().includes(filter));
+    ...state.servers.map((s) => ({ key: s.key, name: s.name, sub: `${s.subscription} · ${s.address}:${s.port}`, proto: s.protocol, off: s.disabled, country: s.country, exit_ip: s.exit_ip, colo: s.colo })),
+    ...state.relay_names.map((n) => ({ key: n, name: n, sub: "свой relay", proto: "openlag", off: null, country: null })),
+  ].filter((r) => !filter || (r.name + r.sub + (r.country ? countryName(r.country) : "")).toLowerCase().includes(filter));
+  const pingOf = (r) => { const p = ex.get(r.key); return p?.alive ? p.srtt_ms : 1e9; };
   rows.sort((a, b) => {
     if (!!a.off !== !!b.off) return a.off ? 1 : -1;
-    const pa = ex.get(a.key), pb = ex.get(b.key);
-    const va = pa?.alive ? pa.srtt_ms : 1e9, vb = pb?.alive ? pb.srtt_ms : 1e9;
-    return va - vb;
+    if (serverSort === "country") {
+      const ca = a.country ? countryName(a.country) : "яяя", cb = b.country ? countryName(b.country) : "яяя";
+      if (ca !== cb) return ca.localeCompare(cb, "ru");
+    }
+    return pingOf(a) - pingOf(b);
   });
-  const list = $("server-list");
-  $("server-empty").hidden = rows.length > 0;
-  const keep = new Set(rows.map((r) => r.key));
-  for (const [k, el] of rowEls) if (!keep.has(k)) { el.remove(); rowEls.delete(k); }
-  rows.forEach((r, i) => {
+  renderCountries(ex);
+
+  // Ordered elements: optional country headers, then rows.
+  const order = [];
+  let lastGroup = null;
+  for (const r of rows) {
+    if (serverSort === "country") {
+      const g = r.off ? "off" : r.country ?? "?";
+      if (g !== lastGroup) {
+        lastGroup = g;
+        order.push(groupHeader(g));
+      }
+    }
     let el = rowEls.get(r.key);
     if (!el) rowEls.set(r.key, (el = serverRow(r.key)));
     updateRow(el, r, r.off ? null : ex.get(r.key), pref);
-    // Reorder by moving nodes only where the order changed.
+    order.push(el);
+  }
+  const list = $("server-list");
+  $("server-empty").hidden = rows.length > 0;
+  const keep = new Set(order);
+  for (const el of [...list.children]) if (!keep.has(el)) el.remove();
+  for (const [k, el] of rowEls) if (!el.isConnected && !keep.has(el)) rowEls.delete(k);
+  order.forEach((el, i) => {
+    // Move nodes only where the order changed.
     if (list.children[i] !== el) list.insertBefore(el, list.children[i] ?? null);
   });
 }
+
+const groupEls = new Map();
+function groupHeader(g) {
+  let el = groupEls.get(g);
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "srv-group";
+    el.innerHTML = g === "off" ? `<span class="flag none">—</span>Отключённые` : g === "?" ? `${flagHtml(null)}Страна ещё не определена` : `${flagHtml(g)}${esc(countryName(g))}`;
+    groupEls.set(g, el);
+  }
+  return el;
+}
+
+// Country chips: every measured exit country with its server count and best ping.
+function renderCountries(ex) {
+  const by = new Map();
+  let unknown = 0;
+  for (const s of state.servers) {
+    if (!s.country) { if (!s.disabled) unknown++; continue; }
+    const c = by.get(s.country) ?? { n: 0, on: 0, best: null };
+    c.n++;
+    if (!s.disabled) c.on++;
+    const p = ex.get(s.key);
+    if (p?.alive && (c.best == null || p.srtt_ms < c.best)) c.best = p.srtt_ms;
+    by.set(s.country, c);
+  }
+  const disabled = new Set(state.settings.disabled_countries.map((c) => c.toUpperCase()));
+  const autos = state.servers.filter((s) => s.auto).length;
+  const chips = [...by].sort((a, b) => countryName(a[0]).localeCompare(countryName(b[0]), "ru")).map(([cc, c]) => {
+    const off = disabled.has(cc);
+    return `<button class="cchip${off ? " off" : ""}" data-cc="${cc}" title="${off ? "Включить" : "Отключить"} все серверы: ${esc(countryName(cc))}">${flagHtml(cc)}<b>${esc(countryName(cc))}</b><span>${c.n}</span>${c.best != null && !off ? `<i class="${pingClass(c.best)}">${fmtMs(c.best)} мс</i>` : ""}</button>`;
+  });
+  if (autos) {
+    const off = state.settings.disable_auto;
+    chips.unshift(`<button class="cchip auto${off ? " off" : ""}" data-auto="1" title="${off ? "Включить" : "Отключить"} все авто-серверы">${icon("zap")}<b>Авто-серверы</b><span>${autos}</span></button>`);
+  }
+  const html = chips.join("") || `<span class="hint">Страны появятся через несколько секунд после запуска серверов.</span>`;
+  const box = $("countries");
+  if (box.dataset.html !== html) {
+    box.dataset.html = html;
+    box.innerHTML = html;
+    box.querySelectorAll("[data-cc]").forEach((b) => b.addEventListener("click", async () => {
+      const cc = b.dataset.cc;
+      const enable = disabled.has(cc);
+      await call("set_country_enabled", { country: cc, enabled: enable }, `${countryName(cc)}: ${enable ? "включена" : "отключена"}`);
+      await refreshState();
+    }));
+    box.querySelector("[data-auto]")?.addEventListener("click", async () => {
+      const off = !state.settings.disable_auto;
+      await call("set_disable_auto", { disabled: off }, off ? "Авто-серверы отключены" : "Авто-серверы включены");
+      await refreshState();
+    });
+  }
+  $("geo-note").textContent = unknown ? `· не определено: ${unknown}` : "";
+}
+
+document.querySelectorAll("#sort-seg button").forEach((b) => {
+  b.classList.toggle("active", b.dataset.sort === serverSort);
+  b.addEventListener("click", () => {
+    serverSort = b.dataset.sort;
+    try { localStorage.setItem("server-sort", serverSort); } catch { /* ignore */ }
+    document.querySelectorAll("#sort-seg button").forEach((x) => x.classList.toggle("active", x === b));
+    renderServers();
+  });
+});
+$("geo-refresh").addEventListener("click", async () => {
+  await call("refresh_geo", {}, "Перепроверяю страны выхода…");
+});
 
 function renderFilters() {
   const words = state.settings.disabled_keywords;
@@ -686,7 +800,12 @@ listen("tick", (e) => {
   if (state && state.capturing !== tick.capturing) state.capturing = tick.capturing;
   for (const [k, p] of exits()) {
     const h = history.get(k) ?? [];
-    h.push({ rtt: p.alive ? p.last_rtt_ms ?? p.srtt_ms : null, loss: p.loss_pct });
+    // Skip a server's first seconds: they include connection setup through the
+    // proxy (often 500+ ms) and would squash the chart for two minutes.
+    const seen = (warmup.get(k) ?? 0) + (p.alive ? 1 : 0);
+    warmup.set(k, seen);
+    const rtt = p.alive && seen > 3 ? p.last_rtt_ms ?? p.srtt_ms : null;
+    h.push({ rtt, loss: seen > 3 ? p.loss_pct : null });
     if (h.length > HISTORY_MAX) h.shift();
     history.set(k, h);
   }
@@ -725,6 +844,10 @@ window.addEventListener("resize", renderAll);
 Fun.init();
 // The window is created hidden and shown after the first render: no white flash and
 // no half-drawn page, like a native app.
-refreshState().finally(() => invoke("ui_ready"));
+refreshState().finally(async () => {
+  const page = await invoke("start_page").catch(() => null);
+  if (page) document.querySelector(`.nav[data-page="${page}"]`)?.click();
+  invoke("ui_ready");
+});
 // Pick up background changes (auto-refresh, xray restarts).
 setInterval(refreshState, 15000);

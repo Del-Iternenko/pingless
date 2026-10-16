@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod geo;
 mod settings;
 mod sys;
 mod tray;
@@ -27,6 +28,10 @@ struct AppState {
     net: tokio::sync::Mutex<Net>,
     /// Where the engine delivers answers; set while capture runs.
     sink: Arc<parking_lot::RwLock<Option<DownstreamFn>>>,
+    /// Measured exit country of each server, persisted between runs.
+    geo: parking_lot::Mutex<geo::GeoCache>,
+    geo_path: PathBuf,
+    app: std::sync::OnceLock<tauri::AppHandle>,
 }
 
 #[derive(Default)]
@@ -65,6 +70,11 @@ struct ServerView {
     port: u16,
     /// Why the server is off (manual or keyword filter); None if it is on.
     disabled: Option<String>,
+    /// Measured exit: country code, IP and nearest Cloudflare data centre.
+    country: Option<String>,
+    exit_ip: Option<String>,
+    colo: Option<String>,
+    auto: bool,
 }
 
 #[derive(Serialize)]
@@ -101,21 +111,35 @@ struct Tick {
 impl AppState {
     async fn view(&self) -> StateView {
         let settings = self.settings.lock().clone();
-        let mut servers = Vec::new();
-        for sub in settings.subscriptions.iter().filter(|s| s.enabled) {
-            for srv in &sub.servers {
-                let key = sub.server_key(srv);
-                servers.push(ServerView {
-                    disabled: settings.server_disabled(&key, srv),
-                    key,
-                    name: srv.name.clone(),
-                    subscription: sub.name.clone(),
-                    protocol: srv.protocol.clone(),
-                    address: srv.address.clone(),
-                    port: srv.port,
-                });
+        // The guard must not live across the await below (parking_lot guards are !Send).
+        let servers = {
+            let geo = self.geo.lock();
+            let mut servers = Vec::new();
+            for sub in settings.subscriptions.iter().filter(|s| s.enabled) {
+                for srv in &sub.servers {
+                    let key = sub.server_key(srv);
+                    let g = geo.servers.get(&key);
+                    servers.push(ServerView {
+                        disabled: settings.server_disabled(
+                            &key,
+                            srv,
+                            g.map(|g| g.country.as_str()),
+                        ),
+                        country: g.map(|g| g.country.clone()),
+                        exit_ip: g.map(|g| g.ip.clone()),
+                        colo: g.map(|g| g.colo.clone()),
+                        auto: settings::is_auto(&srv.name),
+                        key,
+                        name: srv.name.clone(),
+                        subscription: sub.name.clone(),
+                        protocol: srv.protocol.clone(),
+                        address: srv.address.clone(),
+                        port: srv.port,
+                    });
+                }
             }
-        }
+            servers
+        };
         let relay_names = settings::parse_relays(&settings.relays_toml)
             .map(|r| r.exits.into_iter().map(|e| e.name).collect())
             .unwrap_or_default();
@@ -169,7 +193,10 @@ impl AppState {
         for sub in s.subscriptions.iter().filter(|s| s.enabled) {
             for srv in &sub.servers {
                 let key = sub.server_key(srv);
-                if !keys.contains(&key) && s.server_disabled(&key, srv).is_none() {
+                let country = self.geo.lock().servers.get(&key).map(|g| g.country.clone());
+                if !keys.contains(&key)
+                    && s.server_disabled(&key, srv, country.as_deref()).is_none()
+                {
                     keys.push(key);
                     servers.push(srv.clone());
                 }
@@ -223,8 +250,79 @@ impl AppState {
             switch_margin_ms: 5.0,
             flow_idle_secs: 120,
         };
+        let probe: Vec<(String, std::net::SocketAddr)> = cfg
+            .proxies
+            .iter()
+            .map(|p| (p.name.clone(), p.socks))
+            .collect();
         net.engine = Some(Arc::new(Engine::start(cfg, downstream).await?));
+        self.spawn_geo_probe(probe, false);
         Ok(())
+    }
+
+    /// Measures exit countries of servers whose cached result is missing or stale
+    /// (or all of them with `force`), a few at a time, then tells the UI.
+    fn spawn_geo_probe(&self, servers: Vec<(String, std::net::SocketAddr)>, force: bool) {
+        let Some(app) = self.app.get().cloned() else {
+            return;
+        };
+        let now = settings::now();
+        let todo: Vec<_> = {
+            let cache = self.geo.lock();
+            servers
+                .into_iter()
+                .filter(|(k, _)| {
+                    force
+                        || cache
+                            .servers
+                            .get(k)
+                            .is_none_or(|g| now.saturating_sub(g.checked_at) > geo::STALE_SECS)
+                })
+                .collect()
+        };
+        if todo.is_empty() {
+            return;
+        }
+        tauri::async_runtime::spawn(async move {
+            // Give xray a moment to open its ports.
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let st = app.state::<Arc<AppState>>().inner().clone();
+            // Up to three rounds: a busy server or a slow first XHTTP handshake can
+            // time out once and answer fine a little later.
+            let mut todo = todo;
+            for round in 0..3 {
+                if round > 0 {
+                    tokio::time::sleep(Duration::from_secs(20)).await;
+                }
+                let mut failed = Vec::new();
+                for chunk in todo.chunks(6) {
+                    let results =
+                        futures_util::future::join_all(chunk.iter().map(|(k, socks)| async move {
+                            (k.clone(), *socks, geo::probe(*socks).await)
+                        }))
+                        .await;
+                    let mut cache = st.geo.lock();
+                    for (k, socks, r) in results {
+                        match r {
+                            Ok(g) => {
+                                cache.servers.insert(k, g);
+                            }
+                            Err(e) => {
+                                tracing::debug!("geo {k}: {e:#}");
+                                failed.push((k, socks));
+                            }
+                        }
+                    }
+                    cache.save(&st.geo_path);
+                    drop(cache);
+                    let _ = app.emit("refresh", ());
+                }
+                if failed.is_empty() {
+                    break;
+                }
+                todo = failed;
+            }
+        });
     }
 
     fn start_capture(&self, net: &mut Net) -> Result<()> {
@@ -759,11 +857,15 @@ fn main() {
             let state = Arc::new(AppState {
                 settings: parking_lot::Mutex::new(settings),
                 settings_path,
-                work_dir: data_dir,
+                work_dir: data_dir.clone(),
                 xray_exe: find_xray(app.path().resource_dir().ok()),
                 net: tokio::sync::Mutex::new(Net::default()),
                 sink: Arc::default(),
+                geo: parking_lot::Mutex::new(geo::GeoCache::load(&data_dir.join("geo.json"))),
+                geo_path: data_dir.join("geo.json"),
+                app: std::sync::OnceLock::new(),
             });
+            let _ = state.app.set(app.handle().clone());
             let _ = state.save(); // persist the generated device id
             app.manage(state.clone());
             if let Err(e) = tray::create(app.handle()) {
@@ -849,6 +951,9 @@ fn main() {
             set_relays,
             set_server_enabled,
             set_filters,
+            set_country_enabled,
+            set_disable_auto,
+            refresh_geo,
             set_ui_prefs,
             set_startup,
             list_processes,
@@ -858,6 +963,7 @@ fn main() {
             check_update,
             install_update,
             ui_ready,
+            start_page,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build OpenLag")
@@ -1053,4 +1159,55 @@ fn show_on_start(app: &tauri::AppHandle) {
 #[tauri::command]
 fn ui_ready(app: tauri::AppHandle) {
     show_on_start(&app);
+}
+
+/// Switches a whole exit country on or off.
+#[tauri::command]
+async fn set_country_enabled(st: Shared<'_>, country: String, enabled: bool) -> CmdResult<()> {
+    {
+        let mut s = st.settings.lock();
+        s.disabled_countries
+            .retain(|c| !c.eq_ignore_ascii_case(&country));
+        if !enabled {
+            s.disabled_countries.push(country.to_uppercase());
+        }
+    }
+    st.save().map_err(err)?;
+    st.rebuild().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_disable_auto(st: Shared<'_>, disabled: bool) -> CmdResult<()> {
+    st.settings.lock().disable_auto = disabled;
+    st.save().map_err(err)?;
+    st.rebuild().await;
+    Ok(())
+}
+
+/// Re-measures the exit country of every running server.
+#[tauri::command]
+async fn refresh_geo(st: Shared<'_>) -> CmdResult<()> {
+    let servers: Vec<_> = {
+        let net = st.net.lock().await;
+        net.engine
+            .as_ref()
+            .map(|e| {
+                e.snapshot()
+                    .paths
+                    .into_iter()
+                    .filter(|p| p.kind == "proxy")
+                    .map(|p| (p.exit, p.via))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    st.spawn_geo_probe(servers, true);
+    Ok(())
+}
+
+/// Development aid: `OPENLAG_START_PAGE=servers` opens that tab at start.
+#[tauri::command]
+fn start_page() -> Option<String> {
+    std::env::var("OPENLAG_START_PAGE").ok()
 }

@@ -28,6 +28,10 @@ pub struct Settings {
     /// Servers whose name or address contains any of these words are off too. Unlike
     /// keys, this survives subscription refreshes that rename or add servers.
     pub disabled_keywords: Vec<String>,
+    /// Exit countries (ISO codes, as measured) that are switched off.
+    pub disabled_countries: Vec<String>,
+    /// Switch off every "auto"/balancer server of the subscriptions.
+    pub disable_auto: bool,
     /// Latency probe interval for our own relays, ms.
     pub probe_interval_ms: u64,
     /// Start with Windows (scheduled task with highest privileges).
@@ -63,6 +67,8 @@ impl Default for Settings {
             bypass_tun: true,
             disabled_servers: Vec::new(),
             disabled_keywords: Vec::new(),
+            disabled_countries: Vec::new(),
+            disable_auto: false,
             probe_interval_ms: 250,
             autostart: false,
             start_minimized: false,
@@ -143,9 +149,26 @@ impl Settings {
     }
 
     /// Why a server is switched off, or None if it may be used.
-    pub fn server_disabled(&self, key: &str, srv: &ProxyServer) -> Option<String> {
+    /// `country` is the measured exit country, if known.
+    pub fn server_disabled(
+        &self,
+        key: &str,
+        srv: &ProxyServer,
+        country: Option<&str>,
+    ) -> Option<String> {
         if self.disabled_servers.iter().any(|k| k == key) {
             return Some("отключён вручную".into());
+        }
+        if self.disable_auto && is_auto(&srv.name) {
+            return Some("авто-серверы отключены".into());
+        }
+        if let Some(c) = country
+            && self
+                .disabled_countries
+                .iter()
+                .any(|d| d.eq_ignore_ascii_case(c))
+        {
+            return Some(format!("страна {c} отключена"));
         }
         let text = format!("{} {}", srv.name, srv.address).to_lowercase();
         self.disabled_keywords
@@ -153,6 +176,22 @@ impl Settings {
             .find(|w| !w.trim().is_empty() && text.contains(&w.trim().to_lowercase()))
             .map(|w| format!("фильтр «{}»", w.trim()))
     }
+}
+
+/// Balancer servers that pick the exit themselves ("Auto", "Оптимальная"...).
+pub fn is_auto(name: &str) -> bool {
+    let n = name.to_lowercase();
+    [
+        "auto",
+        "авто",
+        "оптимал",
+        "balanc",
+        "fastest",
+        "best",
+        "лучш",
+    ]
+    .iter()
+    .any(|w| n.contains(w))
 }
 
 pub fn new_id() -> String {

@@ -614,12 +614,20 @@ impl Inner {
             };
             let mut tick = tokio::time::interval(PROXY_PROBE_INTERVAL);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // The first probes of a new association include the proxy's connection
+            // setup (hundreds of ms over XHTTP/REALITY). Send them unrecorded, so
+            // their answers find no outstanding probe and are ignored.
+            let mut warmup = 2;
             loop {
                 tokio::select! {
                     _ = tick.tick() => {
                         txid = txid.wrapping_add(1);
                         socks::encode(PROXY_PROBE_TARGET, &socks::dns_probe(txid), &mut out);
-                        proxy.stats.lock().on_probe_sent(txid as u32, Instant::now());
+                        if warmup > 0 {
+                            warmup -= 1;
+                        } else {
+                            proxy.stats.lock().on_probe_sent(txid as u32, Instant::now());
+                        }
                         if udp.send(&out).await.is_err() {
                             break;
                         }
