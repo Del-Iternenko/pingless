@@ -35,6 +35,8 @@ pub(crate) struct Entry {
     closed_at: Option<Instant>,
     up: Arc<AtomicU64>,
     down: Arc<AtomicU64>,
+    /// The task relaying this connection, to cut it when the selection changes.
+    task: Option<tokio::task::AbortHandle>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,8 +75,27 @@ impl Table {
                 closed_at: None,
                 up: Arc::default(),
                 down: Arc::default(),
+                task: None,
             },
         );
+    }
+
+    /// Cuts the open connections whose app-side port `drop` picks: their relay task
+    /// stops and the app sees the connection close, then reconnects under the new
+    /// rules. Returns how many were cut.
+    pub(crate) fn revoke(&self, drop: impl Fn(u16) -> bool) -> usize {
+        let now = Instant::now();
+        let mut n = 0;
+        for (port, e) in self.map.lock().iter_mut() {
+            if e.closed_at.is_none() && drop(*port) {
+                if let Some(t) = e.task.take() {
+                    t.abort();
+                }
+                e.closed_at = Some(now);
+                n += 1;
+            }
+        }
+        n
     }
 
     pub(crate) fn original(&self, client_port: u16) -> Option<SocketAddr> {
@@ -125,8 +146,9 @@ pub(crate) async fn accept_loop(listener: TcpListener, table: Arc<Table>) {
                 continue;
             }
         };
-        let table = table.clone();
-        tokio::spawn(async move {
+        let table2 = table.clone();
+        let task = tokio::spawn(async move {
+            let table = table2;
             let found = {
                 let mut map = table.map.lock();
                 map.get_mut(&peer.port()).map(|e| {
@@ -147,6 +169,11 @@ pub(crate) async fn accept_loop(listener: TcpListener, table: Arc<Table>) {
                 e.closed_at = Some(Instant::now());
             }
         });
+        if let Some(e) = table.map.lock().get_mut(&peer.port())
+            && e.closed_at.is_none()
+        {
+            e.task = Some(task.abort_handle());
+        }
     }
 }
 
@@ -183,4 +210,29 @@ async fn pump(a: TcpStream, b: TcpStream, up: &AtomicU64, down: &AtomicU64) {
         let _ = aw.shutdown().await;
     };
     tokio::join!(upstream, downstream);
+}
+
+#[cfg(test)]
+mod revoke_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn revoke_cuts_only_the_picked_connections() {
+        let t = Table::default();
+        let addr = |p: u16| SocketAddr::from(([10, 0, 0, 2], p));
+        let server: SocketAddr = "1.2.3.4:443".parse().unwrap();
+        let socks: SocketAddr = "127.0.0.1:1080".parse().unwrap();
+        t.insert(addr(5000), server, socks, "x".into());
+        t.insert(addr(5001), server, socks, "x".into());
+        let long = tokio::spawn(std::future::pending::<()>());
+        t.map.lock().get_mut(&5000).unwrap().task = Some(long.abort_handle());
+        assert_eq!(t.revoke(|port| port == 5000), 1);
+        assert!(long.await.unwrap_err().is_cancelled());
+        let snap = t.snapshot();
+        let open = |p: u16| snap.iter().find(|s| s.local.port() == p).unwrap().open;
+        assert!(!open(5000));
+        assert!(open(5001));
+        // Already cut: not counted again.
+        assert_eq!(t.revoke(|_| true), 1);
+    }
 }

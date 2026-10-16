@@ -162,6 +162,20 @@ impl Capture {
 
     /// Starts the capture threads. The engine must already be running.
     pub fn start(&mut self, engine: Arc<Engine>) {
+        // Connections tunnelled under the previous selection or mode stay in the tunnel
+        // until they close, and browsers, launchers and chats keep theirs open for
+        // hours: it looked as if both modes ran at once. Cut those that no longer
+        // qualify; the programs reconnect under the new rules.
+        let s = &self.shared;
+        let cut = engine.tcp_revoke(|port| match s.procs.pid_for_port(TCP, port) {
+            Some(pid) => s
+                .selected(pid)
+                .is_none_or(|name| s.udp_only.contains(&name)),
+            None => false,
+        });
+        if cut > 0 {
+            info!("closed {cut} tunnelled TCP connection(s) of programs no longer selected");
+        }
         let shared = self.shared.clone();
         self.threads.push(
             std::thread::Builder::new()

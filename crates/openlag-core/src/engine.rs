@@ -308,6 +308,12 @@ impl Engine {
     pub fn tcp_original(&self, client_port: u16) -> Option<SocketAddr> {
         self.inner.tcp_table.original(client_port)
     }
+
+    /// Closes tunnelled TCP connections whose app-side port `drop` picks (used when
+    /// the selection or mode changed and those programs must not use the tunnel).
+    pub fn tcp_revoke(&self, drop: impl Fn(u16) -> bool) -> usize {
+        self.inner.tcp_table.revoke(drop)
+    }
 }
 
 fn open_socket(route: &RouteSpec) -> Result<UdpSocket> {

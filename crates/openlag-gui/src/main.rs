@@ -986,6 +986,10 @@ fn main() {
             if let Err(e) = tray::create(app.handle()) {
                 warn!("tray icon: {e}");
             }
+            let legacy = sys::stop_legacy_openlag();
+            if legacy > 0 {
+                warn!("closed {legacy} running OpenLag copy(ies): two apps capture with different modes");
+            }
             if let Err(e) = sys::register_url_scheme() {
                 warn!("pingless:// links: {e:#}");
             }

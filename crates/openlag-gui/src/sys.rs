@@ -300,3 +300,102 @@ pub fn set_priority(pid: u32, class: u32) -> u32 {
 
 pub const NORMAL_PRIORITY: u32 = 0x20;
 pub const HIGH_PRIORITY: u32 = 0x80;
+
+/// Full path of a running process's executable.
+pub fn process_path(pid: u32) -> Option<std::path::PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        QueryFullProcessImageNameW,
+    };
+    // SAFETY: plain handle use; the buffer outlives the call; the handle is closed.
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return None;
+        }
+        let mut buf = vec![0u16; 1024];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len);
+        CloseHandle(h);
+        (ok != 0).then(|| std::ffi::OsString::from_wide(&buf[..len as usize]).into())
+    }
+}
+
+/// Up to 1.0 the app was called OpenLag and could run twice. A copy of it still running
+/// next to Pingless captures traffic with its own, possibly different, mode and
+/// programs: close it and drop its logon task. Only an installed OpenLag is touched
+/// (its folder holds openlag-xray.exe), never some other program of that name.
+pub fn stop_legacy_openlag() -> usize {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
+    let _ = std::process::Command::new("schtasks")
+        .args(["/Delete", "/TN", "OpenLag", "/F"])
+        .creation_flags(0x0800_0000)
+        .output();
+    let mut stopped = 0;
+    for pid in legacy_openlag_pids() {
+        // SAFETY: plain handle use; the handle is closed below.
+        unsafe {
+            let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if !h.is_null() {
+                if TerminateProcess(h, 0) != 0 {
+                    stopped += 1;
+                }
+                CloseHandle(h);
+            }
+        }
+    }
+    stopped
+}
+
+/// Running OpenLag.exe copies from an OpenLag install folder.
+fn legacy_openlag_pids() -> Vec<u32> {
+    let me = std::process::id();
+    processes()
+        .into_iter()
+        .filter(|(pid, name)| *pid != me && name == "openlag.exe")
+        .filter(|(pid, _)| {
+            process_path(*pid)
+                .and_then(|p| p.parent().map(|d| d.join("openlag-xray.exe").exists()))
+                .unwrap_or(false)
+        })
+        .map(|(pid, _)| pid)
+        .collect()
+}
+
+#[cfg(test)]
+mod legacy_tests {
+    #[test]
+    fn finds_an_installed_openlag_only() {
+        let dir = std::env::temp_dir().join(format!("legacy-openlag-{}", std::process::id()));
+        let plain = dir.join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        // A fake install: OpenLag.exe (really ping.exe) next to openlag-xray.exe...
+        let ping = std::path::Path::new(r"C:\Windows\System32\PING.EXE");
+        std::fs::copy(ping, dir.join("OpenLag.exe")).unwrap();
+        std::fs::write(dir.join("openlag-xray.exe"), b"").unwrap();
+        // ...and an unrelated program that is merely called openlag.exe.
+        std::fs::copy(ping, plain.join("OpenLag.exe")).unwrap();
+        let spawn = |p: std::path::PathBuf| {
+            std::process::Command::new(p)
+                .args(["-n", "30", "127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap()
+        };
+        let mut ours = spawn(dir.join("OpenLag.exe"));
+        let mut other = spawn(plain.join("OpenLag.exe"));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let found = super::legacy_openlag_pids();
+        let _ = ours.kill();
+        let _ = other.kill();
+        let _ = ours.wait();
+        let _ = other.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(found.contains(&ours.id()), "{found:?}");
+        assert!(!found.contains(&other.id()));
+    }
+}
