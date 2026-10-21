@@ -399,3 +399,75 @@ mod legacy_tests {
         assert!(!found.contains(&other.id()));
     }
 }
+
+/// The Windows system proxy when it points at this machine (e.g. a local xray or
+/// v2rayN). Browsers then hand their traffic to that proxy over loopback, which
+/// Pingless cannot capture, and the tunnel looks broken for them.
+pub fn loopback_system_proxy() -> Option<String> {
+    use windows_sys::Win32::System::Registry::{
+        HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
+    };
+    let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    let key = wide(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings");
+    let mut enabled: u32 = 0;
+    let mut size = 4u32;
+    // SAFETY: valid null-terminated strings and an output buffer of the stated size.
+    let ok = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            wide("ProxyEnable").as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            (&raw mut enabled).cast(),
+            &mut size,
+        )
+    };
+    if ok != 0 || enabled == 0 {
+        return None;
+    }
+    let mut buf = vec![0u16; 1024];
+    let mut size = (buf.len() * 2) as u32;
+    // SAFETY: as above.
+    let ok = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            wide("ProxyServer").as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    if ok != 0 {
+        return None;
+    }
+    let server = String::from_utf16_lossy(&buf[..(size as usize / 2).saturating_sub(1)]);
+    is_loopback_proxy(&server).then_some(server)
+}
+
+/// "127.0.0.1:10809", "http=localhost:8080;https=..." and the like.
+fn is_loopback_proxy(server: &str) -> bool {
+    server.split(';').any(|part| {
+        let addr = part.rsplit('=').next().unwrap_or("").trim();
+        let addr = addr.split("://").last().unwrap_or(addr);
+        let host = addr.rsplit_once(':').map_or(addr, |(h, _)| h);
+        let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
+        host == "localhost" || host == "::1" || host.starts_with("127.")
+    })
+}
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::is_loopback_proxy;
+
+    #[test]
+    fn spots_local_proxies_only() {
+        assert!(is_loopback_proxy("127.0.0.1:10809"));
+        assert!(is_loopback_proxy("http=localhost:8080;https=localhost:8080"));
+        assert!(is_loopback_proxy("socks=[::1]:1080"));
+        assert!(!is_loopback_proxy("proxy.corp.local:3128"));
+        assert!(!is_loopback_proxy("10.0.0.5:8080"));
+    }
+}

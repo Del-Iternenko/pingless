@@ -412,6 +412,18 @@ impl AppState {
         capture.start(engine);
         net.capture = Some(capture);
         info!("capture started");
+        if let Some(proxy) = sys::loopback_system_proxy() {
+            warn!("system proxy {proxy} is on: browsers send traffic there, past the capture");
+            if let Some(app) = self.app.get() {
+                let _ = app.emit(
+                    "notify",
+                    tr!(
+                        "Включён системный прокси Windows {proxy}: браузеры шлют трафик в него, мимо Pingless. Выключите его в Параметры → Сеть и Интернет → Прокси.",
+                        "Windows system proxy {proxy} is on: browsers send traffic to it, past Pingless. Turn it off in Settings → Network & internet → Proxy."
+                    ),
+                );
+            }
+        }
         Ok(())
     }
 

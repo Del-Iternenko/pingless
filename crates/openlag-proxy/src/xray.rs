@@ -113,6 +113,11 @@ pub fn build_config_with(servers: &[(ProxyServer, u16)], opts: &XrayOptions) -> 
             "port": port,
             "protocol": "socks",
             "settings": { "auth": "noauth", "udp": true, "ip": "127.0.0.1" },
+            // Captured traffic arrives as bare IPs resolved by the local (often
+            // filtered) DNS. Take the real domain from TLS SNI, HTTP Host or QUIC and
+            // let the exit server resolve it: blocked sites and CDNs pick the right
+            // address for the exit, as in a normal VPN client.
+            "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] },
         }));
         let mut out = server.outbound.clone();
         out["tag"] = json!(format!("out-{i}"));
