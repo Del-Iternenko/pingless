@@ -181,12 +181,14 @@ impl AppState {
         settings::save(&self.settings_path, &self.settings.lock())
     }
 
-    /// Restarts xray and the engine from the current settings, keeping capture on if
-    /// it was on.
+    /// Restarts xray and the engine from the current settings. Capture stays on the
+    /// whole time: while the tunnel is down protected programs are blocked instead of
+    /// slipping out direct, and their connections opened meanwhile are reset after.
     async fn rebuild(&self) {
         let mut net = self.net.lock().await;
-        let was_capturing = net.capture.is_some();
-        self.stop_capture(&mut net);
+        if let Some(c) = &net.capture {
+            c.set_engine(None, None);
+        }
         net.engine = None;
         net.xray = None;
         net.server_errors.clear();
@@ -195,8 +197,12 @@ impl AppState {
             warn!("network setup failed: {e:#}");
             net.error = Some(format!("{e:#}"));
         }
-        if was_capturing && let Err(e) = self.start_capture(&mut net) {
-            net.error = Some(format!("{e:#}"));
+        if let Some(c) = &net.capture {
+            let pid = net.xray.as_ref().and_then(|x| x.pid());
+            c.set_engine(net.engine.clone(), pid);
+            if net.engine.is_some() {
+                info!("tunnel back under the running capture");
+            }
         }
     }
 
@@ -362,10 +368,13 @@ impl AppState {
             s.all_except() || !processes.is_empty(),
             "select at least one process"
         );
-        let engine = net
-            .engine
-            .clone()
-            .context("add a subscription or a relay first")?;
+        // Without a tunnel (it failed to start) capture still runs and blocks the
+        // protected programs; the next rebuild hands it the tunnel.
+        let engine = net.engine.clone();
+        anyhow::ensure!(
+            engine.is_some() || !s.protect.is_empty() || s.kill_switch,
+            "add a subscription or a relay first"
+        );
         anyhow::ensure!(sys::is_admin(), "capture needs Administrator rights");
         // TCP is redirected to a local listener; Windows Firewall must let it in.
         if let Err(e) = sys::ensure_firewall_rule() {
@@ -398,6 +407,7 @@ impl AppState {
                     .collect()
             },
             kill_switch: s.kill_switch,
+            protect: s.protect.clone(),
             udp_only: if s.all_except() {
                 Vec::new()
             } else {
@@ -634,7 +644,38 @@ async fn refresh_one(st: &AppState, id: &str) -> Result<bool> {
         "the subscription returned no usable servers"
     );
     let mut s = st.settings.lock();
+    let mut changed = false;
+    // Servers in use: the pinned one and the groups' ones.
+    let used: Vec<String> = s
+        .preferred_exit
+        .iter()
+        .chain(s.groups.iter().filter_map(|g| g.exit.as_ref()))
+        .cloned()
+        .collect();
     if let Some(sub) = s.subscriptions.iter_mut().find(|s| s.id == id) {
+        // Only a change to a server in use needs the network rebuilt (a rebuild resets
+        // every tunnelled connection). Providers that ask for hourly updates mostly
+        // send the same list; new or changed spare servers wait for the next restart.
+        let json = |list: &[openlag_proxy::ProxyServer]| -> HashMap<String, String> {
+            list.iter()
+                .map(|srv| {
+                    (
+                        sub.server_key(srv),
+                        serde_json::to_string(srv).unwrap_or_default(),
+                    )
+                })
+                .collect()
+        };
+        let (old, new) = (json(&sub.servers), json(&parsed.servers));
+        let mine: Vec<&String> = used.iter().filter(|k| old.contains_key(*k)).collect();
+        changed = if mine.is_empty() {
+            old != new
+        } else {
+            mine.iter().any(|k| old.get(*k) != new.get(*k))
+        };
+        if !changed && old != new {
+            info!("subscription {id}: list changed, the server in use did not: no restart");
+        }
         sub.servers = parsed.servers;
         sub.skipped = parsed.skipped;
         if let Some(t) = info.title.clone().filter(|t| !t.trim().is_empty()) {
@@ -643,7 +684,7 @@ async fn refresh_one(st: &AppState, id: &str) -> Result<bool> {
         sub.info = info;
         sub.updated_at = settings::now();
     }
-    Ok(true)
+    Ok(changed)
 }
 
 #[tauri::command]
@@ -1038,6 +1079,15 @@ fn main() {
                         state.rebuild().await;
                         continue;
                     }
+                    // Keep the server the engine pinned on its own across restarts.
+                    if let Some(p) = net.engine.as_ref().and_then(|e| e.preferred_exit()) {
+                        let mut s = state.settings.lock();
+                        if s.preferred_exit.as_deref() != Some(p.as_str()) {
+                            s.preferred_exit = Some(p);
+                            drop(s);
+                            let _ = state.save();
+                        }
+                    }
                     let tick = Tick {
                         snapshot: net.engine.as_ref().map(|e| e.snapshot()),
                         capture: net.capture.as_ref().map(|c| {
@@ -1180,7 +1230,9 @@ async fn auto_connect(st: Arc<AppState>, handle: tauri::AppHandle) {
         tokio::time::sleep(Duration::from_secs(2)).await;
         let (enabled, wanted) = {
             let s = st.settings.lock();
-            (s.auto_connect && !s.all_except(), s.selected_processes())
+            let mut wanted = s.selected_processes();
+            wanted.extend(s.protect.iter().cloned());
+            (s.auto_connect && !s.all_except(), wanted)
         };
         if !enabled || wanted.is_empty() {
             continue;
@@ -1195,10 +1247,7 @@ async fn auto_connect(st: Arc<AppState>, handle: tauri::AppHandle) {
         match found {
             Some(name) => {
                 last_running = std::time::Instant::now();
-                if net.capture.is_none()
-                    && !net.suppress_auto
-                    && net.engine.is_some()
-                    && sys::is_admin()
+                if net.capture.is_none() && !net.suppress_auto && sys::is_admin()
                 {
                     match st.start_capture(&mut net) {
                         Ok(()) => {

@@ -243,7 +243,7 @@ async fn traffic_moves_to_the_remaining_route_when_one_dies() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn flow_goes_direct_when_no_relay_answers() {
+async fn flow_stays_in_the_tunnel_when_no_relay_answers() {
     // Nothing listens here.
     let dead: SocketAddr = {
         let s = std::net::UdpSocket::bind(local()).unwrap();
@@ -252,9 +252,9 @@ async fn flow_goes_direct_when_no_relay_answers() {
     let (engine, _) = start(config(vec![route("dead", dead)], 2)).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
     let key = game_flow("1.1.1.1:27015".parse().unwrap());
-    assert_eq!(engine.send_upstream(key, b"x"), Upstream::Direct);
-    // And it stays direct: switching later would change the IP the game server sees.
-    assert_eq!(engine.send_upstream(key, b"x"), Upstream::Direct);
+    // Never direct while an exit exists: leaving the tunnel shows the home IP.
+    assert_eq!(engine.send_upstream(key, b"x"), Upstream::Tunneled);
+    assert_eq!(engine.send_upstream(key, b"x"), Upstream::Tunneled);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -266,10 +266,10 @@ async fn wrong_key_is_rejected_by_exit() {
     let (engine, received) = start(cfg).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(!engine.any_route_alive());
-    // Flow goes direct, nothing reaches the game through the exit.
+    // The flow stays on the exit (never direct), and the exit lets nothing through.
     assert_eq!(
         engine.send_upstream(game_flow(game), &0u32.to_le_bytes()),
-        Upstream::Direct
+        Upstream::Tunneled
     );
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(received.lock().is_empty());

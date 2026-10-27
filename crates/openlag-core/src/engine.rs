@@ -268,6 +268,11 @@ impl Engine {
 
     /// New flows go to this exit (relay or proxy name) while it is alive.
     /// `None` picks the exit with the best score.
+    /// The server new connections use (set by the user, or pinned automatically).
+    pub fn preferred_exit(&self) -> Option<String> {
+        self.inner.preferred.lock().clone()
+    }
+
     pub fn set_preferred_exit(&self, name: Option<String>) {
         *self.inner.preferred.lock() = name;
     }
@@ -298,9 +303,11 @@ impl Engine {
         };
         let p = &inner.proxies[idx];
         debug!("tcp {client} -> {orig} via {}", p.spec.name);
+        // One server, like a plain VPN: a connection never hops to another exit (the
+        // site would see a new IP; Claude then asks to log in again).
         inner
             .tcp_table
-            .insert(client, orig, p.spec.socks, p.spec.name.clone());
+            .insert(client, orig, p.spec.socks, p.spec.name.clone(), Vec::new());
         true
     }
 
@@ -460,9 +467,18 @@ impl Inner {
         Upstream::Tunneled
     }
 
-    /// `prefer` (a group's server) wins over the global preferred exit; both only
-    /// while alive.
+    /// `prefer` (a group's server) wins over the global preferred exit, alive or not.
     fn best_exit(&self, prefer: Option<&str>) -> Option<ExitRef> {
+        // The chosen server is kept even when a probe says it is down: switching
+        // servers changes the IP sites see, and going direct leaves the tunnel. A
+        // dead server shows in the UI; the user picks another one.
+        let global = self.preferred.lock().clone();
+        for name in [prefer, global.as_deref()].into_iter().flatten() {
+            if let Some(e) = self.exit_by_name(name) {
+                return Some(e);
+            }
+            debug!("preferred exit {name} is not in the list");
+        }
         let now = Instant::now();
         let mut candidates: Vec<(ExitRef, f64)> = Vec::new();
         for (i, e) in self.exits.iter().enumerate() {
@@ -480,36 +496,87 @@ impl Inner {
                 candidates.push((ExitRef::Proxy(i), score));
             }
         }
-        let global = self.preferred.lock().clone();
-        for name in [prefer, global.as_deref()].into_iter().flatten() {
-            if let Some((e, _)) = candidates.iter().find(|(e, _)| self.exit_name(*e) == name) {
-                return Some(*e);
-            }
-            warn!("preferred exit {name} is not reachable");
-        }
-        candidates
+        let best = candidates
             .into_iter()
             .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(e, _)| e)
+            .map(|(e, _)| e);
+        match best {
+            // Nothing chosen yet: pin the best measured server for good.
+            Some(e) => {
+                self.pin(self.exit_name(e));
+                Some(e)
+            }
+            // Not measured yet: use the first one without pinning it.
+            None => (!self.proxies.is_empty())
+                .then_some(ExitRef::Proxy(0))
+                .or((!self.exits.is_empty()).then_some(ExitRef::Relay(0))),
+        }
+    }
+
+    fn exit_by_name(&self, name: &str) -> Option<ExitRef> {
+        if let Some(i) = self.proxies.iter().position(|p| p.spec.name == name) {
+            return Some(ExitRef::Proxy(i));
+        }
+        self.exits
+            .iter()
+            .position(|e| e.name == name)
+            .map(ExitRef::Relay)
+    }
+
+    fn pin(&self, name: &str) {
+        let mut p = self.preferred.lock();
+        if p.as_deref().is_none_or(|n| self.exit_by_name(n).is_none()) {
+            info!("server pinned: {name}");
+            *p = Some(name.to_owned());
+        }
     }
 
     /// Best alive proxy exit, honouring the preferred exit when it is a proxy.
     fn best_proxy(&self, prefer: Option<&str>) -> Option<usize> {
-        let now = Instant::now();
+        // Same rule as best_exit: the chosen server stays, alive or not.
         let global = self.preferred.lock().clone();
         for name in [prefer, global.as_deref()].into_iter().flatten() {
-            if let Some(i) = self.proxies.iter().position(|p| p.spec.name == name)
-                && self.proxies[i].stats.lock().alive(now)
-            {
+            if let Some(i) = self.proxies.iter().position(|p| p.spec.name == name) {
                 return Some(i);
             }
         }
-        self.proxies
+        if self.proxies.is_empty() {
+            return None;
+        }
+        let now = Instant::now();
+        let best = self
+            .proxies
             .iter()
             .enumerate()
             .filter_map(|(i, p)| Some((i, p.stats.lock().score(now)?)))
             .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i);
+        match best {
+            Some(i) => {
+                self.pin(&self.proxies[i].spec.name);
+                Some(i)
+            }
+            None => Some(0),
+        }
+    }
+
+    /// Other alive proxy exits, best first, to try when `first` does not reach a
+    /// server. Unused: connections stay on one server.
+    #[allow(dead_code)]
+    fn proxy_fallbacks(&self, first: usize) -> Vec<usize> {
+        let now = Instant::now();
+        let mut v: Vec<(usize, f64)> = self
+            .proxies
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != first)
+            .filter_map(|(i, p)| Some((i, p.stats.lock().score(now)?)))
+            .collect();
+        v.sort_by(|a, b| a.1.total_cmp(&b.1));
+        v.into_iter()
             .map(|(i, _)| i)
+            .take(tcp::MAX_TRIES - 1)
+            .collect()
     }
 
     async fn recv_loop(self: Arc<Self>, id: u16) {

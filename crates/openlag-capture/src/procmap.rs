@@ -13,6 +13,10 @@ use windows_sys::Win32::NetworkManagement::IpHelper::{
     GetExtendedTcpTable, GetExtendedUdpTable, TCP_TABLE_OWNER_PID_ALL, UDP_TABLE_OWNER_PID,
 };
 use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+    TH32CS_SNAPPROCESS,
+};
 use windows_sys::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
@@ -24,6 +28,11 @@ pub const UDP: u8 = 17;
 const SNAPSHOT_MIN_INTERVAL: Duration = Duration::from_millis(100);
 /// PIDs are reused by Windows; re-resolve names after this long.
 const NAME_TTL: Duration = Duration::from_secs(30);
+/// A failed name lookup is retried this soon: treating a selected program as unknown
+/// sends its traffic past the tunnel.
+const NAME_FAIL_TTL: Duration = Duration::from_secs(2);
+/// Rate limit for [`ProcessMap::recheck`].
+const RECHECK_MIN_INTERVAL: Duration = Duration::from_millis(20);
 
 #[derive(Default)]
 pub struct ProcessMap {
@@ -35,6 +44,7 @@ struct State {
     owners: HashMap<(u8, u16), u32>,
     names: HashMap<u32, (Option<String>, Instant)>,
     last_snapshot: HashMap<u8, Instant>,
+    last_recheck: HashMap<u8, Instant>,
 }
 
 impl ProcessMap {
@@ -73,16 +83,50 @@ impl ProcessMap {
         st.owners.get(&(proto, port)).copied()
     }
 
+    /// Owner of `port` according to the system table, read now. The live map can be
+    /// wrong: a socket event missed or processed after the packet leaves the previous
+    /// owner of a reused port in place, and the program's connection then went direct.
+    /// Returns None when rate-limited or the port is not in the table.
+    pub fn recheck(&self, proto: u8, port: u16) -> Option<u32> {
+        let now = Instant::now();
+        {
+            let mut st = self.state.lock();
+            if st
+                .last_recheck
+                .get(&proto)
+                .is_some_and(|t| now - *t < RECHECK_MIN_INTERVAL)
+            {
+                return None;
+            }
+            st.last_recheck.insert(proto, now);
+        }
+        // Read the table without holding the lock: the socket thread keeps going.
+        let table = port_table(proto);
+        let mut st = self.state.lock();
+        st.last_snapshot.insert(proto, now);
+        let mut found = None;
+        for (p, pid) in table {
+            if st.owners.insert((proto, p), pid) != Some(pid) {
+                st.names.remove(&pid);
+            }
+            if p == port {
+                found = Some(pid);
+            }
+        }
+        found
+    }
+
     /// Lower-case executable file name, e.g. `cs2.exe`.
     pub fn name(&self, pid: u32) -> Option<String> {
         let now = Instant::now();
         let mut st = self.state.lock();
-        if let Some((name, at)) = st.names.get(&pid)
-            && now - *at < NAME_TTL
-        {
-            return name.clone();
+        if let Some((name, at)) = st.names.get(&pid) {
+            let ttl = if name.is_some() { NAME_TTL } else { NAME_FAIL_TTL };
+            if now - *at < ttl {
+                return name.clone();
+            }
         }
-        let name = process_name(pid);
+        let name = process_name(pid).or_else(|| snapshot_name(pid));
         st.names.insert(pid, (name.clone(), now));
         name
     }
@@ -117,6 +161,11 @@ pub fn port_table(proto: u8) -> Vec<(u16, u32)> {
             );
             let pid =
                 u32::from_ne_bytes(buf[base + pid_off..base + pid_off + 4].try_into().unwrap());
+            // TIME_WAIT rows have no owner (pid 0); as owners they would hide the
+            // program that reuses the port.
+            if pid == 0 {
+                continue;
+            }
             // The port is stored in network byte order in the low 16 bits.
             out.push(((port_raw as u16).swap_bytes(), pid));
         }
@@ -182,6 +231,35 @@ fn process_name(pid: u32) -> Option<String> {
     }
 }
 
+/// Name from the process list, for processes OpenProcess refuses. The priority
+/// boost already found programs this way when the capture could not name them.
+fn snapshot_name(pid: u32) -> Option<String> {
+    if pid == 0 || pid == 4 {
+        return None;
+    }
+    // SAFETY: standard ToolHelp iteration; the snapshot handle is closed below.
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap.is_null() || snap as isize == -1 {
+            return None;
+        }
+        let mut e: PROCESSENTRY32W = std::mem::zeroed();
+        e.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut found = None;
+        let mut ok = Process32FirstW(snap, &mut e) != 0;
+        while ok {
+            if e.th32ProcessID == pid {
+                let len = e.szExeFile.iter().position(|&c| c == 0).unwrap_or(e.szExeFile.len());
+                found = Some(String::from_utf16_lossy(&e.szExeFile[..len]).to_lowercase());
+                break;
+            }
+            ok = Process32NextW(snap, &mut e) != 0;
+        }
+        CloseHandle(snap);
+        found
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +280,17 @@ mod tests {
         }
         let name = map.name(std::process::id()).unwrap();
         assert!(name.ends_with(".exe"), "{name}");
+        assert_eq!(snapshot_name(std::process::id()).as_deref(), Some(name.as_str()));
+    }
+
+    #[test]
+    fn recheck_replaces_a_stale_owner() {
+        let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = tcp.local_addr().unwrap().port();
+        let map = ProcessMap::default();
+        map.on_bind(TCP, port, 999_999);
+        assert_eq!(map.pid_for_port(TCP, port), Some(999_999));
+        assert_eq!(map.recheck(TCP, port), Some(std::process::id()));
+        assert_eq!(map.pid_for_port(TCP, port), Some(std::process::id()));
     }
 }

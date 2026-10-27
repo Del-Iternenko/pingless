@@ -150,6 +150,7 @@ pub struct TcpInfo {
     pub dst: SocketAddrV4,
     pub syn: bool,
     pub ack: bool,
+    pub rst: bool,
 }
 
 /// Parses an IPv4 TCP packet header. IPv6 TCP is not redirected yet.
@@ -174,7 +175,38 @@ pub fn parse_tcp_v4(pkt: &[u8]) -> Option<TcpInfo> {
         ),
         syn: t[13] & 0x02 != 0,
         ack: t[13] & 0x10 != 0,
+        rst: t[13] & 0x04 != 0,
     })
+}
+
+/// Builds the RST|ACK a server would send back for this outbound IPv4 TCP packet,
+/// to end a connection on the program's side at once.
+pub fn build_tcp_rst_v4(pkt: &[u8]) -> Option<Vec<u8>> {
+    let info = parse_tcp_v4(pkt)?;
+    let ihl = (pkt[0] & 0x0f) as usize * 4;
+    let total = (u16::from_be_bytes([pkt[2], pkt[3]]) as usize).min(pkt.len());
+    let t = &pkt[ihl..total];
+    let data_off = ((t[12] >> 4) as usize * 4).max(20);
+    let mut payload = t.len().saturating_sub(data_off) as u32;
+    if t[13] & 0x01 != 0 {
+        payload += 1; // FIN takes a sequence number
+    }
+    let seq = u32::from_be_bytes([t[8], t[9], t[10], t[11]]);
+    let ack = u32::from_be_bytes([t[4], t[5], t[6], t[7]]);
+    let mut out = vec![0u8; 40];
+    out[0] = 0x45;
+    out[2..4].copy_from_slice(&40u16.to_be_bytes());
+    out[6] = 0x40; // don't fragment
+    out[8] = 64;
+    out[9] = TCP;
+    let tcp = &mut out[20..];
+    tcp[4..8].copy_from_slice(&seq.to_be_bytes()); // our seq = what the program acked
+    tcp[8..12].copy_from_slice(&ack.wrapping_add(payload).to_be_bytes());
+    tcp[12] = 5 << 4;
+    tcp[13] = 0x14; // RST | ACK
+    // Addresses, ports and checksums: as sent by the server to the program.
+    rewrite_tcp_v4(&mut out, info.dst, info.src)?;
+    Some(out)
 }
 
 /// Rewrites addresses and ports of an IPv4 TCP packet in place and recomputes the
@@ -313,6 +345,32 @@ mod tests {
         let pseudo = sum(&pkt[16..20], sum(&pkt[12..16], 0)) + TCP as u32 + (pkt.len() - 20) as u32;
         assert_eq!(fold(sum(&pkt[20..], pseudo)), 0, "TCP checksum");
         assert_eq!(&pkt[pkt.len() - 3..], b"abc");
+    }
+
+    #[test]
+    fn rst_answers_the_outbound_packet() {
+        // ACK+PSH from 10.0.0.2:50000 to 93.184.216.34:443, seq 1000, ack 5000, 3 bytes.
+        let mut pkt = vec![
+            0x45, 0, 0, 0, 0, 0, 0x40, 0, 64, TCP, 0, 0, 10, 0, 0, 2, 93, 184, 216, 34,
+        ];
+        pkt.extend_from_slice(&[
+            0xc3, 0x50, 0x01, 0xbb, 0, 0, 0x03, 0xe8, 0, 0, 0x13, 0x88, 0x50, 0x18, 0xff, 0xff,
+            0, 0, 0, 0,
+        ]);
+        pkt.extend_from_slice(b"abc");
+        let len = pkt.len() as u16;
+        pkt[2..4].copy_from_slice(&len.to_be_bytes());
+
+        let rst = build_tcp_rst_v4(&pkt).unwrap();
+        let info = parse_tcp_v4(&rst).unwrap();
+        assert_eq!(info.src, "93.184.216.34:443".parse().unwrap());
+        assert_eq!(info.dst, "10.0.0.2:50000".parse().unwrap());
+        assert!(info.rst && info.ack && !info.syn);
+        assert_eq!(&rst[24..28], &5000u32.to_be_bytes(), "seq = what the program acked");
+        assert_eq!(&rst[28..32], &1003u32.to_be_bytes(), "ack = its seq + payload");
+        assert_eq!(fold(sum(&rst[..20], 0)), 0, "IP checksum");
+        let pseudo = sum(&rst[16..20], sum(&rst[12..16], 0)) + TCP as u32 + 20;
+        assert_eq!(fold(sum(&rst[20..], pseudo)), 0, "TCP checksum");
     }
 
     #[test]

@@ -114,7 +114,7 @@ async fn run(cfg: Config) -> Result<()> {
     if !engine.any_route_alive() {
         tracing::warn!("no relay answers yet; new game flows go direct until one does");
     }
-    capture.start(engine.clone());
+    capture.start(Some(engine.clone()));
     let result = dashboard(&engine, || {
         let s = capture.stats();
         format!(

@@ -7,7 +7,7 @@
 //! port, then copies bytes both ways.
 
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -15,8 +15,9 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use parking_lot::Mutex;
 use serde::Serialize;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::socks;
 
@@ -24,12 +25,24 @@ use crate::socks;
 const PENDING_TTL: Duration = Duration::from_secs(60);
 /// After a connection ends its mapping is kept a little for late FIN/ACK packets.
 const CLOSED_TTL: Duration = Duration::from_secs(30);
+/// How long to wait for the program's TLS ClientHello before giving up on fallback.
+const CLIENT_HELLO_WAIT: Duration = Duration::from_secs(2);
+/// A server that does not answer a ClientHello through one exit this long is tried
+/// through the next exit. Some sites drop whole VPN subnets: the connection then
+/// hangs at the TLS handshake while other exits reach the site fine.
+const SERVER_HELLO_WAIT: Duration = Duration::from_secs(5);
+/// A site that needed another exit keeps using it this long.
+const LEARNED_TTL: Duration = Duration::from_secs(600);
+/// Exits tried per connection, the first one included.
+pub(crate) const MAX_TRIES: usize = 3;
 
 pub(crate) struct Entry {
     pub(crate) orig: SocketAddr,
     pub(crate) client: SocketAddr,
     pub(crate) socks: SocketAddr,
     pub(crate) exit: String,
+    /// Other exits to try when the first one does not reach the server.
+    alts: Vec<(SocketAddr, String)>,
     created: Instant,
     accepted: bool,
     closed_at: Option<Instant>,
@@ -53,6 +66,8 @@ pub struct TcpSnapshot {
 #[derive(Default)]
 pub(crate) struct Table {
     map: Mutex<HashMap<u16, Entry>>,
+    /// Server IP -> exit that reached it after the first choice did not.
+    learned: Mutex<HashMap<IpAddr, (String, Instant)>>,
 }
 
 impl Table {
@@ -62,6 +77,7 @@ impl Table {
         orig: SocketAddr,
         socks: SocketAddr,
         exit: String,
+        alts: Vec<(SocketAddr, String)>,
     ) {
         self.map.lock().insert(
             client.port(),
@@ -70,6 +86,7 @@ impl Table {
                 client,
                 socks,
                 exit,
+                alts,
                 created: Instant::now(),
                 accepted: false,
                 closed_at: None,
@@ -102,8 +119,21 @@ impl Table {
         self.map.lock().get(&client_port).map(|e| e.orig)
     }
 
+    /// The exit that last reached `ip` after another one failed, if recent.
+    #[allow(dead_code)]
+    pub(crate) fn learned(&self, ip: IpAddr) -> Option<String> {
+        let map = self.learned.lock();
+        let (name, at) = map.get(&ip)?;
+        (at.elapsed() < LEARNED_TTL).then(|| name.clone())
+    }
+
+    fn learn(&self, ip: IpAddr, exit: &str) {
+        self.learned.lock().insert(ip, (exit.to_owned(), Instant::now()));
+    }
+
     pub(crate) fn sweep(&self) {
         let now = Instant::now();
+        self.learned.lock().retain(|_, (_, at)| now - *at < LEARNED_TTL);
         self.map.lock().retain(|_, e| match e.closed_at {
             Some(t) => now - t < CLOSED_TTL,
             None => e.accepted || now - e.created < PENDING_TTL,
@@ -153,16 +183,29 @@ pub(crate) async fn accept_loop(listener: TcpListener, table: Arc<Table>) {
                 let mut map = table.map.lock();
                 map.get_mut(&peer.port()).map(|e| {
                     e.accepted = true;
-                    (e.orig, e.socks, e.up.clone(), e.down.clone())
+                    let mut route = vec![(e.socks, e.exit.clone())];
+                    route.extend(e.alts.iter().cloned());
+                    (e.orig, route, e.up.clone(), e.down.clone())
                 })
             };
-            let Some((orig, socks_addr, up, down)) = found else {
+            let Some((orig, route, up, down)) = found else {
                 debug!("tcp from {peer}: no redirect entry");
                 return;
             };
+            let mut inbound = inbound;
             let _ = inbound.set_nodelay(true);
-            match socks::connect(socks_addr, orig).await {
-                Ok(outbound) => pump(inbound, outbound, &up, &down).await,
+            match open(&mut inbound, orig, &route).await {
+                Ok((outbound, used)) => {
+                    if used > 0 {
+                        let name = &route[used].1;
+                        info!("{orig}: {} did not answer, using {name}", route[0].1);
+                        table.learn(orig.ip(), name);
+                        if let Some(e) = table.map.lock().get_mut(&peer.port()) {
+                            e.exit = name.clone();
+                        }
+                    }
+                    pump(inbound, outbound, &up, &down).await
+                }
                 Err(e) => debug!("tcp {peer} -> {orig}: {e:#}"),
             }
             if let Some(e) = table.map.lock().get_mut(&peer.port()) {
@@ -177,8 +220,80 @@ pub(crate) async fn accept_loop(listener: TcpListener, table: Arc<Table>) {
     }
 }
 
+/// Connects to `orig` through the first exit of `route` that answers. For TLS the
+/// program's ClientHello is read first and replayed to the next exit when the server
+/// stays silent; other protocols just use the first exit. Returns the outbound
+/// stream (the server's first bytes already passed on to the program) and the index
+/// of the exit used.
+async fn open(
+    inbound: &mut TcpStream,
+    orig: SocketAddr,
+    route: &[(SocketAddr, String)],
+) -> Result<(TcpStream, usize)> {
+    let hello = if route.len() > 1 {
+        tokio::time::timeout(CLIENT_HELLO_WAIT, read_client_hello(inbound))
+            .await
+            .unwrap_or(Ok(Vec::new()))?
+    } else {
+        Vec::new()
+    };
+    let is_tls = hello.len() > 5 && hello[0] == 0x16 && hello[1] == 3;
+    let mut last_err = None;
+    let mut buf = vec![0u8; 16 * 1024];
+    for (i, (socks_addr, name)) in route.iter().enumerate() {
+        let last = i + 1 == route.len() || !is_tls;
+        let mut out = match socks::connect(*socks_addr, orig).await {
+            Ok(s) => s,
+            Err(e) => {
+                debug!("tcp -> {orig} via {name}: {e:#}");
+                last_err = Some(e);
+                if last {
+                    break;
+                }
+                continue;
+            }
+        };
+        if !hello.is_empty() {
+            out.write_all(&hello).await?;
+        }
+        if last {
+            return Ok((out, i));
+        }
+        match tokio::time::timeout(SERVER_HELLO_WAIT, out.read(&mut buf)).await {
+            Ok(Ok(n)) if n > 0 => {
+                inbound.write_all(&buf[..n]).await?;
+                return Ok((out, i));
+            }
+            _ => debug!("tcp -> {orig}: no answer via {name}"),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no exit reached {orig}")))
+}
+
+/// Reads what the program sends first; for TLS, the whole first record (a
+/// post-quantum ClientHello spans several TCP segments). A timeout around this
+/// covers programs that wait for the server to speak first.
+async fn read_client_hello(inbound: &mut TcpStream) -> Result<Vec<u8>> {
+    let mut data = vec![0u8; 16 * 1024];
+    let mut have = inbound.read(&mut data).await?;
+    if have == 0 {
+        anyhow::bail!("program closed the connection");
+    }
+    if have >= 5 && data[0] == 0x16 && data[1] == 3 {
+        let want = (5 + u16::from_be_bytes([data[3], data[4]]) as usize).min(data.len());
+        while have < want {
+            let n = inbound.read(&mut data[have..want]).await?;
+            if n == 0 {
+                break;
+            }
+            have += n;
+        }
+    }
+    data.truncate(have);
+    Ok(data)
+}
+
 async fn pump(a: TcpStream, b: TcpStream, up: &AtomicU64, down: &AtomicU64) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let (mut ar, mut aw) = a.into_split();
     let (mut br, mut bw) = b.into_split();
     let upstream = async {
@@ -222,8 +337,8 @@ mod revoke_tests {
         let addr = |p: u16| SocketAddr::from(([10, 0, 0, 2], p));
         let server: SocketAddr = "1.2.3.4:443".parse().unwrap();
         let socks: SocketAddr = "127.0.0.1:1080".parse().unwrap();
-        t.insert(addr(5000), server, socks, "x".into());
-        t.insert(addr(5001), server, socks, "x".into());
+        t.insert(addr(5000), server, socks, "x".into(), Vec::new());
+        t.insert(addr(5001), server, socks, "x".into(), Vec::new());
         let long = tokio::spawn(std::future::pending::<()>());
         t.map.lock().get_mut(&5000).unwrap().task = Some(long.abort_handle());
         assert_eq!(t.revoke(|port| port == 5000), 1);
@@ -234,5 +349,70 @@ mod revoke_tests {
         assert!(open(5001));
         // Already cut: not counted again.
         assert_eq!(t.revoke(|_| true), 1);
+    }
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::*;
+
+    /// Minimal SOCKS5 server: accepts CONNECT, then answers the first bytes with
+    /// `reply` (or stays silent when it is None).
+    async fn fake_socks(reply: Option<&'static [u8]>) -> SocketAddr {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut s, _) = l.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let mut b = [0u8; 512];
+                    let _ = s.read(&mut b).await; // greeting
+                    s.write_all(&[5, 0]).await.unwrap();
+                    let _ = s.read(&mut b).await; // CONNECT
+                    s.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).await.unwrap();
+                    let _ = s.read(&mut b).await; // ClientHello
+                    match reply {
+                        Some(r) => s.write_all(r).await.unwrap(),
+                        None => std::future::pending::<()>().await,
+                    }
+                    std::future::pending::<()>().await;
+                });
+            }
+        });
+        addr
+    }
+
+    #[tokio::test]
+    #[ignore = "fallback between servers is off: one server only"]
+    async fn silent_exit_falls_back_to_the_next() {
+        let dead = fake_socks(None).await;
+        let good = fake_socks(Some(b"server-hello")).await;
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut app = TcpStream::connect(l.local_addr().unwrap()).await.unwrap();
+        let (mut inbound, _) = l.accept().await.unwrap();
+        // TLS record header + 4-byte body.
+        app.write_all(&[0x16, 3, 1, 0, 4, 1, 2, 3, 4]).await.unwrap();
+        let route = vec![(dead, "dead".to_string()), (good, "good".to_string())];
+        let orig: SocketAddr = "1.2.3.4:443".parse().unwrap();
+        let (_out, used) = open(&mut inbound, orig, &route).await.unwrap();
+        assert_eq!(used, 1);
+        let mut got = [0u8; 12];
+        app.read_exact(&mut got).await.unwrap();
+        assert_eq!(&got, b"server-hello");
+    }
+
+    #[tokio::test]
+    async fn plain_protocols_stay_on_the_first_exit() {
+        let first = fake_socks(None).await;
+        let other = fake_socks(Some(b"x")).await;
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut app = TcpStream::connect(l.local_addr().unwrap()).await.unwrap();
+        let (mut inbound, _) = l.accept().await.unwrap();
+        app.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
+        let route = vec![(first, "a".to_string()), (other, "b".to_string())];
+        let (_out, used) = open(&mut inbound, "1.2.3.4:80".parse().unwrap(), &route)
+            .await
+            .unwrap();
+        assert_eq!(used, 0);
     }
 }

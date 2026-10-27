@@ -58,14 +58,36 @@ pub struct Settings {
     games: Vec<String>,
     pub multipath: usize,
     pub tunnel_existing: bool,
-    /// Exit key the user pinned; None = automatic.
+    /// Exit key the user pinned; None = the best one is picked once and pinned.
     pub preferred_exit: Option<String>,
+    /// Programs that always use the tunnel and are blocked rather than sent direct
+    /// while it is down (Claude Code and the tools it runs).
+    pub protect: Vec<String>,
     pub subscriptions: Vec<Subscription>,
     /// Own relays in TOML (`psk = ...` and `[[exits]]`), for advanced users.
     pub relays_toml: String,
     pub user_agent: String,
     /// Stable device id sent to subscription panels that limit devices.
     pub hwid: String,
+}
+
+/// Claude Code and what it runs for its work: the Anthropic API refuses Russian IPs
+/// and logs the session out, so these must never leave outside the tunnel.
+pub fn default_protect() -> Vec<String> {
+    [
+        "claude.exe",
+        "node.exe",
+        "powershell.exe",
+        "pwsh.exe",
+        "bash.exe",
+        "git.exe",
+        "git-remote-https.exe",
+        "gh.exe",
+        "curl.exe",
+        "ssh.exe",
+    ]
+    .map(String::from)
+    .to_vec()
 }
 
 impl Default for Settings {
@@ -95,6 +117,7 @@ impl Default for Settings {
             multipath: 2,
             tunnel_existing: false,
             preferred_exit: None,
+            protect: default_protect(),
             subscriptions: Vec::new(),
             relays_toml: String::new(),
             user_agent: openlag_proxy::FetchOptions::default().user_agent,
